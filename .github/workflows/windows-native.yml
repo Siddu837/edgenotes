@@ -1,0 +1,34 @@
+name: Build native EdgeNotes for Windows
+on:
+  workflow_dispatch:
+  push:
+    paths: ['native/windows/**', '.github/workflows/windows-native.yml']
+  pull_request:
+    paths: ['native/windows/**', '.github/workflows/windows-native.yml']
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, x86]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Compile native app and run storage tests
+        shell: pwsh
+        run: ./native/windows/build.ps1
+      - name: Package portable Windows app
+        shell: pwsh
+        run: |
+          Copy-Item native/windows/README.md native/windows/build/README.md
+          Compress-Archive -Path native/windows/build/EdgeNotes.exe,native/windows/build/README.md -DestinationPath native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EdgeNotes-windows-${{ matrix.arch }}
+          path: native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 30
