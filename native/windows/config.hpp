@@ -16,6 +16,7 @@ struct Config {
     float position = 0.25f; // relative position along the screen edge (0.0 to 1.0)
     bool pinned = false;
     int themeMode = 0; // 0 = Auto (Windows system), 1 = Light, 2 = Dark
+    bool hasRunBefore = false; // First-run detection for desktop shortcut prompt
 
     static std::string sideToString(DockSide s) {
         switch (s) {
@@ -58,6 +59,7 @@ struct Config {
             else if (key == "theme") {
                 try { themeMode = std::stoi(val); } catch (...) {}
             }
+            else if (key == "hasRunBefore") hasRunBefore = (val == "1" || val == "true");
         }
         return true;
     }
@@ -69,6 +71,7 @@ struct Config {
         file << "position=" << position << "\n";
         file << "pinned=" << (pinned ? "1" : "0") << "\n";
         file << "theme=" << themeMode << "\n";
+        file << "hasRunBefore=" << (hasRunBefore ? "1" : "0") << "\n";
         return true;
     }
 };

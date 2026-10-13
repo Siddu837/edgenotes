@@ -63,7 +63,12 @@ enum {
     CmdFilterArchive,
     CmdPinEditor,
     CmdBackToDeck,
-    CmdColorBase = 200 // 200..207 for 8 paper colors
+    CmdDockSettings,   // Open dock settings popup
+    CmdThemeToggle,     // Toggle light/dark theme
+    CmdUnpinDrawer,     // Unpin the drawer
+    CmdAddToDesktop,    // Create desktop shortcut
+    CmdPromptDesktopShortcut, // First run shortcut prompt
+    CmdColorBase = 200  // 200..207 for 8 paper colors
 };
 
 constexpr UINT WM_TRAYICON = WM_APP + 1;
@@ -105,10 +110,26 @@ bool isModalOpen = false;
 bool isDraggingDock = false;
 POINT dragStartCursor{};
 float dragStartPosition = 0.5f;
-int hoveredTabIndex = -1; // -1 none, 0..4 notes, 5 add, 6 settings
+int hoveredTabIndex = -1; // -1 none, 0..4 notes, 100 add, 101 theme, 102 settings
+bool dockSettingsPopupOpen = false;
 int hoveredPeekCard = -1;
 int hoveredManagerRow = -1;
 int activeColorSwatch = 0;
+int activeDeck = 0; // 0: WORK, 1: PERSONAL, 2: SCRATCHPAD, 3: IDEAS, 4: ARCHIVE
+
+struct DeckDef {
+    const wchar_t* name;
+    const wchar_t* titleName;
+    COLORREF color;
+};
+
+const DeckDef DeckList[5] = {
+    { L"WORK",       L"Work",       RGB(167, 243, 208) }, // Mint (#A7F3D0)
+    { L"PERSONAL",   L"Personal",   RGB(186, 230, 253) }, // Sky (#BAE6FD)
+    { L"SCRATCHPAD", L"Scratchpad", RGB(254, 240, 138) }, // Yellow (#FEF08A)
+    { L"IDEAS",      L"Ideas",      RGB(254, 205, 211) }, // Rose / Pink (#FECDD3)
+    { L"ARCHIVE",    L"Archive",    RGB(233, 213, 255) }  // Lavender (#E9D5FF)
+};
 std::string hotkeyCollisionNotice;
 
 std::wstring storagePath;
@@ -118,27 +139,6 @@ std::wstring configPath;
 int managerFilter = CmdFilterAll;
 std::vector<std::uint64_t> managerRows;
 std::uint64_t managerSelectedId = 0;
-
-// DPI helper
-float GetDpiScale(HWND hwnd) {
-    HMODULE hUser = GetModuleHandleW(L"user32.dll");
-    if (hUser) {
-        typedef UINT(WINAPI * GetDpiForWindowFn)(HWND);
-        auto pfn = reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(hUser, "GetDpiForWindow"));
-        if (pfn && hwnd) {
-            UINT dpi = pfn(hwnd);
-            if (dpi > 0) return static_cast<float>(dpi) / 96.0f;
-        }
-    }
-    HDC dc = GetDC(hwnd);
-    int dpi = GetDeviceCaps(dc, LOGPIXELSX);
-    ReleaseDC(hwnd, dc);
-    return dpi > 0 ? (static_cast<float>(dpi) / 96.0f) : 1.0f;
-}
-
-int Scale(HWND hwnd, int val) {
-    return static_cast<int>(std::round(val * GetDpiScale(hwnd)));
-}
 
 void LogDebug(const wchar_t* msg) {
     PWSTR localFolder = nullptr;
@@ -151,6 +151,43 @@ void LogDebug(const wchar_t* msg) {
             fclose(fp);
         }
     }
+}
+
+// DPI helper
+float GetDpiScale(HWND hwnd) {
+    float result = 1.0f;
+    if (hwnd) {
+        HMODULE hUser = GetModuleHandleW(L"user32.dll");
+        if (hUser) {
+            typedef UINT(WINAPI * GetDpiForWindowFn)(HWND);
+            auto pfn = reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(hUser, "GetDpiForWindow"));
+            if (pfn) {
+                UINT dpi = pfn(hwnd);
+                if (dpi > 0) result = static_cast<float>(dpi) / 96.0f;
+            }
+        }
+    }
+    if (result == 1.0f) {
+        HMONITOR hMon = MonitorFromWindow(hwnd ? hwnd : GetDesktopWindow(), MONITOR_DEFAULTTONEAREST);
+        if (hMon) {
+            HMODULE hShcore = LoadLibraryW(L"shcore.dll");
+            if (hShcore) {
+                typedef HRESULT(WINAPI * GetDpiForMonitorFn)(HMONITOR, int, UINT*, UINT*);
+                auto pfnMon = reinterpret_cast<GetDpiForMonitorFn>(GetProcAddress(hShcore, "GetDpiForMonitor"));
+                if (pfnMon) {
+                    UINT dpiX = 0, dpiY = 0;
+                    if (SUCCEEDED(pfnMon(hMon, 0 /* MDT_EFFECTIVE_DPI */, &dpiX, &dpiY)) && dpiX > 0) {
+                        result = static_cast<float>(dpiX) / 96.0f;
+                    }
+                }
+            }
+        }
+    }
+    return result;
+}
+
+int Scale(HWND hwnd, int val) {
+    return static_cast<int>(std::round(val * GetDpiScale(hwnd)));
 }
 
 // UTF-8 string conversions
@@ -200,6 +237,30 @@ std::vector<Note*> GetDeckNotes() {
         if (!n.archived) {
             result.push_back(&n);
             if (result.size() >= 5) break;
+        }
+    }
+    return result;
+}
+
+std::vector<Note*> GetNotesForActiveDeck() {
+    std::vector<Note*> result;
+    for (auto& n : store.notes) {
+        if (activeDeck == 4) {
+            if (n.archived) result.push_back(&n);
+        } else {
+            if (!n.archived) {
+                int mapped = 0;
+                if (n.color == 1) mapped = 1;
+                else if (n.color == 3) mapped = 2;
+                else if (n.color == 4) mapped = 3;
+                else mapped = 0;
+                if (mapped == activeDeck) result.push_back(&n);
+            }
+        }
+    }
+    if (result.empty() && activeDeck == 0) {
+        for (auto& n : store.notes) {
+            if (!n.archived) result.push_back(&n);
         }
     }
     return result;
@@ -340,34 +401,35 @@ RECT GetDockWorkArea() {
 void UpdateDockGeometry() {
     if (!dockHwnd) return;
     RECT work = GetDockWorkArea();
-    auto notes = GetDeckNotes();
-    int noteCount = static_cast<int>(notes.size());
 
     bool isVertical = (config.side == DockSide::Left || config.side == DockSide::Right);
 
-    int pillLen = Scale(dockHwnd, 82);
-    int pillThick = Scale(dockHwnd, 38);
+    int pillLen = Scale(dockHwnd, 64);   // Browser proportioned tabs
+    int pillThick = Scale(dockHwnd, 42);  // Strip width
     int gripSize = Scale(dockHwnd, 24);
-    int gap = Scale(dockHwnd, 5);
+    int gap = Scale(dockHwnd, 4);
+    int iconBtnSize = Scale(dockHwnd, 30);
+    int iconGap = Scale(dockHwnd, 6);
 
-    int totalLen = gripSize + gap + (noteCount * (pillLen + gap)) + pillThick + gap + Scale(dockHwnd, 32);
+    // Grip + 5 deck tabs + gap + [+] + [theme] + [settings] + margins
+    int totalLen = gripSize + gap + (5 * (pillLen + gap)) + Scale(dockHwnd, 10) + (3 * (iconBtnSize + iconGap)) + Scale(dockHwnd, 12);
 
     int x = 0, y = 0, w = 0, h = 0;
     if (isVertical) {
         w = pillThick;
         h = totalLen;
-        int maxH = work.bottom - work.top - Scale(dockHwnd, 40);
+        int maxH = work.bottom - work.top - Scale(dockHwnd, 20);
         h = std::min(h, maxH);
         y = work.top + static_cast<int>((work.bottom - work.top - h) * config.position);
-        y = std::max(static_cast<int>(work.top + Scale(dockHwnd, 10)), std::min(static_cast<int>(work.bottom - h - Scale(dockHwnd, 10)), y));
+        y = std::max(static_cast<int>(work.top + Scale(dockHwnd, 5)), std::min(static_cast<int>(work.bottom - h - Scale(dockHwnd, 5)), y));
         x = (config.side == DockSide::Left) ? work.left : (work.right - w);
     } else {
         w = totalLen;
         h = pillThick;
-        int maxW = work.right - work.left - Scale(dockHwnd, 40);
+        int maxW = work.right - work.left - Scale(dockHwnd, 20);
         w = std::min(w, maxW);
         x = work.left + static_cast<int>((work.right - work.left - w) * config.position);
-        x = std::max(static_cast<int>(work.left + Scale(dockHwnd, 10)), std::min(static_cast<int>(work.right - w - Scale(dockHwnd, 10)), x));
+        x = std::max(static_cast<int>(work.left + Scale(dockHwnd, 5)), std::min(static_cast<int>(work.right - w - Scale(dockHwnd, 5)), x));
         y = (config.side == DockSide::Top) ? work.top : (work.bottom - h);
     }
 
@@ -494,6 +556,68 @@ void ApplyFontSizeAndWeight(LONG yHeight, DWORD effects) {
     SaveEditorContent();
 }
 
+void CreateDesktopShortcut() {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    wchar_t exePath[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    PWSTR desktopPath = nullptr;
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desktopPath))) {
+        std::wstring linkPath = std::wstring(desktopPath) + L"\\EdgeNotes.lnk";
+        CoTaskMemFree(desktopPath);
+
+        IShellLinkW* psl = nullptr;
+        if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&psl)))) {
+            psl->SetPath(exePath);
+            psl->SetDescription(L"EdgeNotes - Local notes on the edge of your screen");
+            psl->SetIconLocation(exePath, 0);
+
+            IPersistFile* ppf = nullptr;
+            if (SUCCEEDED(psl->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&ppf)))) {
+                ppf->Save(linkPath.c_str(), TRUE);
+                ppf->Release();
+            }
+            psl->Release();
+        }
+    }
+    CoUninitialize();
+}
+
+void ShowDockSettingsPopup() {
+    dockSettingsPopupOpen = true;
+    HMENU m = CreatePopupMenu();
+
+    AppendMenuW(m, MF_STRING | MF_GRAYED, 0, L"Make yourself at home");
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+
+    AppendMenuW(m, MF_STRING | (config.side == DockSide::Left ? MF_CHECKED : 0), CmdDockLeft, L"\x2190  Dock on left");
+    AppendMenuW(m, MF_STRING | (config.side == DockSide::Right ? MF_CHECKED : 0), CmdDockRight, L"\x2192  Dock on right");
+    AppendMenuW(m, MF_STRING | (config.side == DockSide::Top ? MF_CHECKED : 0), CmdDockTop, L"\x2191  Dock on top");
+    AppendMenuW(m, MF_STRING | (config.side == DockSide::Bottom ? MF_CHECKED : 0), CmdDockBottom, L"\x2193  Dock on bottom");
+
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING | (config.pinned ? MF_CHECKED : 0), CmdUnpinDrawer, L"\x21F9  Unpin drawer");
+
+    if (store.deleted && GetTickCount64() < store.deleted->expires) {
+        AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(m, MF_STRING, CmdUndoDelete, L"Undo deletion\tCtrl+Z");
+    }
+
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, CmdAddToDesktop, L"Add to Desktop");
+    AppendMenuW(m, MF_STRING, CmdExitApp, L"Quit EdgeNotes");
+
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(dockHwnd);
+    int choice = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, dockHwnd, nullptr);
+    DestroyMenu(m);
+    dockSettingsPopupOpen = false;
+    if (choice) ExecuteCommand(choice);
+    PostMessageW(dockHwnd, WM_NULL, 0, 0);
+}
+
 void ShowTrayContextMenu() {
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, CmdNewNote, L"New note\tCtrl+Alt+N");
@@ -533,7 +657,8 @@ void ExecuteCommand(int id) {
         case CmdNewNote: {
             Note note;
             note.id = nextId++;
-            note.color = static_cast<unsigned>(store.notes.size() % 8);
+            note.color = (activeDeck == 0 ? 0 : activeDeck == 1 ? 1 : activeDeck == 2 ? 3 : activeDeck == 3 ? 4 : 2);
+            note.archived = (activeDeck == 4);
             note.title = "Untitled note";
             activeId = note.id;
             store.notes.push_back(note);
@@ -647,6 +772,42 @@ void ExecuteCommand(int id) {
             }
             break;
         }
+        case CmdDockSettings: {
+            ShowDockSettingsPopup();
+            break;
+        }
+        case CmdThemeToggle: {
+            config.themeMode = (config.themeMode + 1) % 3; // Cycle: Auto -> Light -> Dark
+            config.save(configPath);
+            InvalidateRect(dockHwnd, nullptr, TRUE);
+            if (peekHwnd && IsWindowVisible(peekHwnd)) InvalidateRect(peekHwnd, nullptr, TRUE);
+            if (editorHwnd && IsWindowVisible(editorHwnd)) InvalidateRect(editorHwnd, nullptr, TRUE);
+            break;
+        }
+        case CmdUnpinDrawer: {
+            config.pinned = !config.pinned;
+            config.save(configPath);
+            if (editorHwnd) {
+                SetWindowPos(editorHwnd, config.pinned ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                InvalidateRect(editorHwnd, nullptr, TRUE);
+            }
+            break;
+        }
+        case CmdAddToDesktop: {
+            CreateDesktopShortcut();
+            MessageBoxW(dockHwnd, L"EdgeNotes shortcut has been added to your Desktop!", L"EdgeNotes", MB_ICONINFORMATION);
+            break;
+        }
+        case CmdPromptDesktopShortcut: {
+            int res = MessageBoxW(dockHwnd,
+                L"Welcome to EdgeNotes!\n\nWould you like to add an EdgeNotes shortcut to your Desktop for quick access?",
+                L"EdgeNotes Setup",
+                MB_YESNO | MB_ICONQUESTION | MB_TOPMOST);
+            if (res == IDYES) {
+                CreateDesktopShortcut();
+            }
+            break;
+        }
         case CmdBackToDeck: {
             SetAppState(AppState::Peek);
             break;
@@ -706,7 +867,12 @@ void ExecuteCommand(int id) {
             break;
         }
         case CmdExitApp: {
-            DestroyWindow(dockHwnd);
+            NOTIFYICONDATAW nidDel{};
+            nidDel.cbSize = sizeof(nidDel);
+            nidDel.hWnd = dockHwnd;
+            nidDel.uID = 1;
+            Shell_NotifyIconW(NIM_DELETE, &nidDel);
+            PostQuitMessage(0);
             break;
         }
         default: {
@@ -824,38 +990,38 @@ void PaintDock(HWND hwnd) {
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
 
-    // Background: Dark / Night theme surface
-    Gdiplus::SolidBrush bgBrush(ToGdiColor(NightSurface));
-    g.FillRectangle(&bgBrush, 0, 0, client.right, client.bottom);
+    // Fill with key color for transparency
+    g.Clear(Gdiplus::Color(255, 12, 14, 18));
 
-    auto notes = GetDeckNotes();
     bool isVertical = (config.side == DockSide::Left || config.side == DockSide::Right);
 
     int gripSize = Scale(hwnd, 24);
-    int pillLen = Scale(hwnd, 82);
-    int pillThick = Scale(hwnd, 38);
-    int gap = Scale(hwnd, 5);
+    int pillLen = Scale(hwnd, 64);
+    int pillThick = Scale(hwnd, 42);
+    int gap = Scale(hwnd, 4);
+    int iconBtnSize = Scale(hwnd, 30);
+    int iconGap = Scale(hwnd, 6);
 
-    // 1. Drag Grip at the top/start
-    Gdiplus::SolidBrush gripBrush(ToGdiColor(NightMuted));
-    int gripDotsX = isVertical ? (client.right / 2 - Scale(hwnd, 5)) : Scale(hwnd, 8);
+    // 1. Drag Grip at the top/start (3x3 circular dots)
+    Gdiplus::SolidBrush gripBrush(Gdiplus::Color(210, 255, 255, 255));
+    int gripDotsX = isVertical ? (client.right / 2 - Scale(hwnd, 5)) : Scale(hwnd, 10);
     int gripDotsY = isVertical ? Scale(hwnd, 8) : (client.bottom / 2 - Scale(hwnd, 5));
     for (int r = 0; r < 3; ++r) {
-        for (int c = 0; c < 2; ++c) {
+        for (int c = 0; c < 3; ++c) {
             g.FillEllipse(&gripBrush, gripDotsX + c * Scale(hwnd, 5), gripDotsY + r * Scale(hwnd, 5), Scale(hwnd, 2), Scale(hwnd, 2));
         }
     }
 
     int currentPos = gripSize + gap;
 
-    // 2. Note Tabs (up to 5)
-    for (std::size_t i = 0; i < notes.size(); ++i) {
-        const auto* n = notes[i];
-        bool isHovered = (hoveredTabIndex == static_cast<int>(i));
+    // 2. The 5 Deck Tabs: WORK, PERSONAL, SCRATCHPAD, IDEAS, ARCHIVE
+    for (int i = 0; i < 5; ++i) {
+        bool isHovered = (hoveredTabIndex == i);
+        bool isActive = (activeDeck == i && (appState == AppState::Peek || appState == AppState::Editing));
+
+        int hoverOffset = isHovered ? Scale(hwnd, 8) : (isActive ? Scale(hwnd, 4) : 0);
 
         Gdiplus::RectF tabRect;
-        int hoverOffset = isHovered ? Scale(hwnd, 6) : 0;
-
         if (isVertical) {
             float x = (config.side == DockSide::Right) ? static_cast<float>(-hoverOffset) : 0.0f;
             tabRect = Gdiplus::RectF(x, static_cast<float>(currentPos), static_cast<float>(pillThick + hoverOffset), static_cast<float>(pillLen));
@@ -864,21 +1030,21 @@ void PaintDock(HWND hwnd) {
             tabRect = Gdiplus::RectF(static_cast<float>(currentPos), y, static_cast<float>(pillLen), static_cast<float>(pillThick + hoverOffset));
         }
 
-        // Pill shape with specific rounded edge
+        // Pill shape with rounded corners on inner side
         Gdiplus::GraphicsPath path;
         AddTabPillToPath(path, tabRect, config.side, static_cast<float>(Scale(hwnd, 8)));
 
-        COLORREF colorVal = PaperColors[n->color % 8];
+        COLORREF colorVal = DeckList[i].color;
         Gdiplus::SolidBrush tabBrush(ToGdiColor(colorVal));
         g.FillPath(&tabBrush, &path);
 
-        Gdiplus::Pen borderPen(ToGdiColor(PaperBorder, 100), 1.0f);
+        Gdiplus::Pen borderPen(Gdiplus::Color(45, 0, 0, 0), 1.0f);
         g.DrawPath(&borderPen, &path);
 
-        // Draw note title rotated or horizontal
-        std::wstring titleText = Wide(n->title.empty() ? "Untitled note" : n->title);
+        // Deck label: uppercase bold
+        std::wstring titleText = DeckList[i].name;
         Gdiplus::SolidBrush textBrush(ToGdiColor(PaperInk));
-        Gdiplus::Font font(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        Gdiplus::Font font(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 
         Gdiplus::StringFormat sf;
         sf.SetAlignment(Gdiplus::StringAlignmentCenter);
@@ -887,14 +1053,13 @@ void PaintDock(HWND hwnd) {
         sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
 
         if (isVertical) {
-            // Save state, translate & rotate for sideways vertical text
             Gdiplus::GraphicsState gState = g.Save();
             float cx = tabRect.X + tabRect.Width / 2.0f;
             float cy = tabRect.Y + tabRect.Height / 2.0f;
             g.TranslateTransform(cx, cy);
             g.RotateTransform(config.side == DockSide::Right ? 270.0f : 90.0f);
 
-            Gdiplus::RectF textBound(-tabRect.Height / 2.0f + 4.0f, -tabRect.Width / 2.0f, tabRect.Height - 8.0f, tabRect.Width);
+            Gdiplus::RectF textBound(-tabRect.Height / 2.0f, -tabRect.Width / 2.0f, tabRect.Height, tabRect.Width);
             g.DrawString(titleText.c_str(), -1, &font, textBound, &sf, &textBrush);
             g.Restore(gState);
         } else {
@@ -904,60 +1069,111 @@ void PaintDock(HWND hwnd) {
         currentPos += pillLen + gap;
     }
 
-    // 3. Plus (+) tab
-    bool isPlusHovered = (hoveredTabIndex == 100);
-    int plusSize = Scale(hwnd, 32);
-    Gdiplus::RectF plusRect;
-    if (isVertical) {
-        float px = (static_cast<float>(client.right) - static_cast<float>(plusSize)) / 2.0f;
-        plusRect = Gdiplus::RectF(px, static_cast<float>(currentPos), static_cast<float>(plusSize), static_cast<float>(plusSize));
-    } else {
-        float py = (static_cast<float>(client.bottom) - static_cast<float>(plusSize)) / 2.0f;
-        plusRect = Gdiplus::RectF(static_cast<float>(currentPos), py, static_cast<float>(plusSize), static_cast<float>(plusSize));
-    }
+    currentPos += Scale(hwnd, 10);
 
-    Gdiplus::GraphicsPath plusPath;
-    AddRoundedRectToPath(plusPath, plusRect, static_cast<float>(Scale(hwnd, 6)));
-    Gdiplus::SolidBrush plusBgBrush(ToGdiColor(isPlusHovered ? NightSelected : NightPanel));
-    g.FillPath(&plusBgBrush, &plusPath);
-    Gdiplus::Pen plusBorder(ToGdiColor(NightBorder), 1.0f);
-    g.DrawPath(&plusBorder, &plusPath);
+    // 3. Three circular icon buttons below tabs: [+] [☀/🌙] [🎛]
+    auto drawCircleButton = [&](int btnIndex, auto drawIcon) {
+        bool isHovered = (hoveredTabIndex == btnIndex);
+        Gdiplus::RectF btnRect;
+        if (isVertical) {
+            float bx = (static_cast<float>(client.right) - static_cast<float>(iconBtnSize)) / 2.0f;
+            btnRect = Gdiplus::RectF(bx, static_cast<float>(currentPos), static_cast<float>(iconBtnSize), static_cast<float>(iconBtnSize));
+        } else {
+            float by = (static_cast<float>(client.bottom) - static_cast<float>(iconBtnSize)) / 2.0f;
+            btnRect = Gdiplus::RectF(static_cast<float>(currentPos), by, static_cast<float>(iconBtnSize), static_cast<float>(iconBtnSize));
+        }
 
-    Gdiplus::Font plusFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 16)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush plusTextBrush(ToGdiColor(NightInk));
-    Gdiplus::StringFormat plusSf;
-    plusSf.SetAlignment(Gdiplus::StringAlignmentCenter);
-    plusSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    g.DrawString(L"+", -1, &plusFont, plusRect, &plusSf, &plusTextBrush);
+        Gdiplus::GraphicsPath btnPath;
+        btnPath.AddEllipse(btnRect);
+
+        Gdiplus::Color bgColor = isHovered ? Gdiplus::Color(255, 45, 48, 58) : Gdiplus::Color(255, 24, 26, 32);
+        Gdiplus::SolidBrush bgBrush(bgColor);
+        g.FillPath(&bgBrush, &btnPath);
+
+        Gdiplus::Pen borderPen(Gdiplus::Color(60, 255, 255, 255), 1.0f);
+        g.DrawPath(&borderPen, &btnPath);
+
+        drawIcon(btnRect, isHovered);
+        currentPos += iconBtnSize + iconGap;
+    };
+
+    // Button 100: [+] (New note)
+    drawCircleButton(100, [&](Gdiplus::RectF r, bool) {
+        Gdiplus::Font plusFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 18)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::SolidBrush plusText(Gdiplus::Color(255, 255, 255, 255));
+        Gdiplus::StringFormat csf;
+        csf.SetAlignment(Gdiplus::StringAlignmentCenter);
+        csf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        g.DrawString(L"+", -1, &plusFont, r, &csf, &plusText);
+    });
+
+    // Button 101: [☀ / 🌙] (Theme toggle)
+    drawCircleButton(101, [&](Gdiplus::RectF r, bool) {
+        Gdiplus::Font themeFont(L"Segoe UI Symbol", static_cast<float>(Scale(hwnd, 13)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::SolidBrush themeText(Gdiplus::Color(255, 255, 255, 255));
+        Gdiplus::StringFormat csf;
+        csf.SetAlignment(Gdiplus::StringAlignmentCenter);
+        csf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        const wchar_t* symbol = (config.themeMode == 1) ? L"\x2600" : L"\x263E"; // ☀ or ☾
+        g.DrawString(symbol, -1, &themeFont, r, &csf, &themeText);
+    });
+
+    // Button 102: [🎛] (Dock settings / Sliders)
+    drawCircleButton(102, [&](Gdiplus::RectF r, bool) {
+        float cx = r.X + r.Width / 2.0f;
+        float cy = r.Y + r.Height / 2.0f;
+        float lineW = static_cast<float>(Scale(hwnd, 14));
+        float x1 = cx - lineW / 2.0f;
+        float x2 = cx + lineW / 2.0f;
+
+        Gdiplus::Pen pen(Gdiplus::Color(255, 255, 255, 255), 1.5f);
+        Gdiplus::SolidBrush knobBrush(Gdiplus::Color(255, 255, 255, 255));
+
+        // Line 1 (top)
+        float y1 = cy - static_cast<float>(Scale(hwnd, 4));
+        g.DrawLine(&pen, x1, y1, x2, y1);
+        g.FillEllipse(&knobBrush, x1 + static_cast<float>(Scale(hwnd, 3)), y1 - static_cast<float>(Scale(hwnd, 2)), static_cast<float>(Scale(hwnd, 4)), static_cast<float>(Scale(hwnd, 4)));
+
+        // Line 2 (bottom)
+        float y2 = cy + static_cast<float>(Scale(hwnd, 4));
+        g.DrawLine(&pen, x1, y2, x2, y2);
+        g.FillEllipse(&knobBrush, x2 - static_cast<float>(Scale(hwnd, 7)), y2 - static_cast<float>(Scale(hwnd, 2)), static_cast<float>(Scale(hwnd, 4)), static_cast<float>(Scale(hwnd, 4)));
+    });
 
     buffer.end(hdc);
     EndPaint(hwnd, &ps);
 }
 
 int HitTestDock(HWND hwnd, int x, int y) {
-    auto notes = GetDeckNotes();
     bool isVertical = (config.side == DockSide::Left || config.side == DockSide::Right);
 
     int gripSize = Scale(hwnd, 24);
-    int pillLen = Scale(hwnd, 82);
-    int gap = Scale(hwnd, 5);
-    int plusSize = Scale(hwnd, 32);
+    int pillLen = Scale(hwnd, 64);
+    int gap = Scale(hwnd, 4);
+    int iconBtnSize = Scale(hwnd, 30);
+    int iconGap = Scale(hwnd, 6);
 
     int pos = isVertical ? y : x;
 
     if (pos < gripSize) return -2; // Grip
 
     int current = gripSize + gap;
-    for (std::size_t i = 0; i < notes.size(); ++i) {
+    for (int i = 0; i < 5; ++i) {
         if (pos >= current && pos < current + pillLen) {
-            return static_cast<int>(i); // Note tab index
+            return i; // Deck tab index 0..4
         }
         current += pillLen + gap;
     }
 
-    if (pos >= current && pos < current + plusSize) {
-        return 100; // '+' button
-    }
+    current += Scale(hwnd, 10);
+
+    if (pos >= current && pos < current + iconBtnSize) return 100; // '+' button
+    current += iconBtnSize + iconGap;
+
+    if (pos >= current && pos < current + iconBtnSize) return 101; // Theme button
+    current += iconBtnSize + iconGap;
+
+    if (pos >= current && pos < current + iconBtnSize) return 102; // Settings button
 
     return -1;
 }
@@ -1047,17 +1263,38 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
 
-            if (hit >= 0 && hit < 100) {
-                auto notes = GetDeckNotes();
-                if (static_cast<std::size_t>(hit) < notes.size()) {
-                    activeId = notes[hit]->id;
-                    SetAppState(AppState::Editing);
+            if (hit >= 0 && hit < 5) {
+                activeDeck = hit;
+                if (appState == AppState::Collapsed) {
+                    SetAppState(AppState::Peek);
+                } else if (appState == AppState::Peek) {
+                    InvalidateRect(peekHwnd, nullptr, TRUE);
+                    InvalidateRect(dockHwnd, nullptr, TRUE);
+                } else if (appState == AppState::Editing) {
+                    auto deckNotes = GetNotesForActiveDeck();
+                    if (!deckNotes.empty()) {
+                        activeId = deckNotes[0]->id;
+                        LoadActiveNoteIntoEditor();
+                    } else {
+                        ExecuteCommand(CmdNewNote);
+                    }
+                    InvalidateRect(dockHwnd, nullptr, TRUE);
                 }
                 return 0;
             }
 
             if (hit == 100) {
                 ExecuteCommand(CmdNewNote);
+                return 0;
+            }
+
+            if (hit == 101) {
+                ExecuteCommand(CmdThemeToggle);
+                return 0;
+            }
+
+            if (hit == 102) {
+                ExecuteCommand(CmdDockSettings);
                 return 0;
             }
 
@@ -1115,32 +1352,34 @@ void PaintPeek(HWND hwnd) {
     Gdiplus::Pen borderPen(ToGdiColor(NightBorder), 1.0f);
     g.DrawPath(&borderPen, &bgPath);
 
-    // Header: Dot, "EdgeNotes", count, close
+    // Header: Dot, Deck Name, count, close (»)
     int pad = Scale(hwnd, 16);
     int topH = Scale(hwnd, 44);
 
-    Gdiplus::SolidBrush dotBrush(ToGdiColor(PaperColors[0]));
+    Gdiplus::SolidBrush dotBrush(ToGdiColor(DeckList[activeDeck].color));
     g.FillEllipse(&dotBrush, pad, Scale(hwnd, 18), Scale(hwnd, 8), Scale(hwnd, 8));
 
     Gdiplus::Font headerFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 14)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     Gdiplus::SolidBrush textBrush(ToGdiColor(NightInk));
-    g.DrawString(L"EdgeNotes", -1, &headerFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 14)), static_cast<float>(Scale(hwnd, 14))), &textBrush);
+    std::wstring deckTitle = DeckList[activeDeck].titleName;
+    g.DrawString(deckTitle.c_str(), -1, &headerFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 14)), static_cast<float>(Scale(hwnd, 14))), &textBrush);
 
-    auto notes = GetDeckNotes();
-    std::wstring countStr = std::to_wstring(notes.size()) + L" thoughts";
+    auto notes = GetNotesForActiveDeck();
+    std::wstring countStr = std::to_wstring(notes.size()) + (notes.size() == 1 ? L" thought" : L" thoughts");
     Gdiplus::Font countFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     Gdiplus::SolidBrush mutedBrush(ToGdiColor(NightMuted));
-    g.DrawString(countStr.c_str(), -1, &countFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 94)), static_cast<float>(Scale(hwnd, 16))), &mutedBrush);
+    float countX = pad + Scale(hwnd, 20) + (static_cast<float>(deckTitle.length()) * Scale(hwnd, 10));
+    g.DrawString(countStr.c_str(), -1, &countFont, Gdiplus::PointF(countX, static_cast<float>(Scale(hwnd, 16))), &mutedBrush);
 
-    // Close button (» or X)
-    Gdiplus::Font closeFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 14)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    Gdiplus::RectF closeRect(static_cast<float>(client.right - pad - Scale(hwnd, 20)), static_cast<float>(Scale(hwnd, 12)), static_cast<float>(Scale(hwnd, 20)), static_cast<float>(Scale(hwnd, 20)));
+    // Close button (» matching browser peek deck)
+    Gdiplus::Font closeFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 16)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::RectF closeRect(static_cast<float>(client.right - pad - Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 12)), static_cast<float>(Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 20)));
     Gdiplus::StringFormat centerSf;
     centerSf.SetAlignment(Gdiplus::StringAlignmentCenter);
     centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    g.DrawString(L"\x2715", -1, &closeFont, closeRect, &centerSf, &mutedBrush);
+    g.DrawString(L"\x00BB", -1, &closeFont, closeRect, &centerSf, &mutedBrush);
 
-    // Cards area: first 5 non-archived notes
+    // Cards area: first 5 non-archived notes in this deck
     int cardY = topH + Scale(hwnd, 4);
     int cardH = Scale(hwnd, 82);
     int cardGap = Scale(hwnd, 8);
@@ -1244,7 +1483,7 @@ int HitTestPeek(HWND hwnd, int x, int y) {
     }
 
     // Cards
-    auto notes = GetDeckNotes();
+    auto notes = GetNotesForActiveDeck();
     if (notes.empty()) {
         if (x >= pad && x <= pad + cardW && y >= cardY && y <= cardY + cardH) {
             return 100; // Fresh note
@@ -1310,7 +1549,7 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (hit >= 0 && hit < 100) {
-                auto notes = GetDeckNotes();
+                auto notes = GetNotesForActiveDeck();
                 if (static_cast<std::size_t>(hit) < notes.size()) {
                     activeId = notes[hit]->id;
                     SetAppState(AppState::Editing);
@@ -1412,9 +1651,19 @@ void PaintEditor(HWND hwnd) {
     centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     g.DrawString(L"\x2190", -1, &navFont, backBtnRect, &centerSf, &inkBrush);
 
-    // Breadcrumb text: "EdgeNotes \x203A [Title]"
-    std::wstring breadcrumb = L"EdgeNotes   \x203A   " + Wide(n ? (n->title.empty() ? "Untitled note" : n->title) : "");
-    g.DrawString(breadcrumb.c_str(), -1, &navFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 32)), static_cast<float>(Scale(hwnd, 13))), &mutedBrush);
+    // Breadcrumb text: "● DeckName » [Title]"
+    Gdiplus::SolidBrush deckDotBrush(ToGdiColor(DeckList[activeDeck].color));
+    float dotX = static_cast<float>(pad + Scale(hwnd, 32));
+    float dotY = static_cast<float>(Scale(hwnd, 17));
+    float dotSize = static_cast<float>(Scale(hwnd, 7));
+    g.FillEllipse(&deckDotBrush, dotX, dotY, dotSize, dotSize);
+
+    std::wstring deckName = DeckList[activeDeck].name;
+    if (deckName.size() > 1) {
+        for (size_t k = 1; k < deckName.size(); ++k) deckName[k] = towlower(deckName[k]);
+    }
+    std::wstring breadcrumb = deckName + L"   \x00BB   " + Wide(n ? (n->title.empty() ? "Untitled note" : n->title) : "");
+    g.DrawString(breadcrumb.c_str(), -1, &navFont, Gdiplus::PointF(dotX + dotSize + static_cast<float>(Scale(hwnd, 6)), static_cast<float>(Scale(hwnd, 13))), &mutedBrush);
 
     // Pin & Close buttons on top right
     Gdiplus::RectF pinRect(static_cast<float>(client.right - pad - Scale(hwnd, 52)), static_cast<float>(Scale(hwnd, 8)), static_cast<float>(Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 24)));
@@ -2218,8 +2467,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     // 7. Create Windows
     dockHwnd = CreateWindowExW(
-        WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"EdgeDock", L"EdgeNotes Dock",
-        WS_POPUP, 0, 0, 38, 540, nullptr, nullptr, inst, nullptr);
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, L"EdgeDock", L"EdgeNotes Dock",
+        WS_POPUP, 0, 0, 44, 750, nullptr, nullptr, inst, nullptr);
+    if (dockHwnd) {
+        SetLayeredWindowAttributes(dockHwnd, RGB(12, 14, 18), 0, LWA_COLORKEY);
+    }
 
     peekHwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"EdgePeek", L"EdgeNotes Peek",
@@ -2263,6 +2515,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     }
 
     SetAppState(AppState::Collapsed, true);
+
+    if (!config.hasRunBefore) {
+        config.hasRunBefore = true;
+        config.save(configPath);
+        PostMessageW(dockHwnd, WM_COMMAND, CmdPromptDesktopShortcut, 0);
+    }
 
     // 10. Win32 Message Loop
     MSG msg{};

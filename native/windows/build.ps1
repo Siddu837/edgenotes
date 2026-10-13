@@ -1,6 +1,27 @@
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot
 try {
+  if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+      $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+      if ($vsPath) {
+        $vcvars = Join-Path $vsPath "VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path $vcvars) {
+          $lines = cmd.exe /c "`"$vcvars`" >nul 2>&1 && set"
+          foreach ($line in $lines) {
+            $idx = $line.IndexOf('=')
+            if ($idx -gt 0) {
+              $k = $line.Substring(0, $idx)
+              $v = $line.Substring($idx + 1)
+              [System.Environment]::SetEnvironmentVariable($k, $v, 'Process')
+            }
+          }
+        }
+      }
+    }
+  }
+
   New-Item -ItemType Directory -Force build | Out-Null
   & cl.exe /nologo /std:c++17 /EHsc /O2 /MT /W4 /DUNICODE /D_UNICODE store-tests.cpp /Febuild\store-tests.exe /Fobuild\store-tests.obj
   if ($LASTEXITCODE -ne 0) { throw 'Native model compilation failed' }
