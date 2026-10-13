@@ -6,6 +6,8 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Native model compilation failed' }
   & .\build\store-tests.exe
   if ($LASTEXITCODE -ne 0) { throw 'Native model tests failed' }
-  & cl.exe /nologo /std:c++17 /EHsc /O2 /MT /W4 /DUNICODE /D_UNICODE main.cpp /Febuild\EdgeNotes.exe /Fobuild\main.obj /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib comctl32.lib comdlg32.lib uuid.lib
+  & rc.exe /nologo /fo build\edgenotes.res edgenotes.rc
+  if ($LASTEXITCODE -ne 0) { throw 'Resource compilation failed' }
+  & cl.exe /nologo /std:c++17 /EHsc /O2 /MT /W4 /DUNICODE /D_UNICODE main.cpp /Febuild\EdgeNotes.exe /Fobuild\main.obj build\edgenotes.res /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib comctl32.lib comdlg32.lib uuid.lib gdiplus.lib dwmapi.lib uxtheme.lib msimg32.lib
   if ($LASTEXITCODE -ne 0) { throw 'Native app compilation failed' }
 } finally { Pop-Location }

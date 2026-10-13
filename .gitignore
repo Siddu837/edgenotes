@@ -30,3 +30,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Native build artifacts
+native/windows/build/
+*.obj
+*.res
+*.pdb
+*.ilk
