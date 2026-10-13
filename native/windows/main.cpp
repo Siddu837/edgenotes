@@ -22,7 +22,8 @@ const COLORREF Paper[] = {RGB(185,228,208), RGB(191,220,245), RGB(220,203,241), 
 const COLORREF Ink = RGB(42,57,55), Night = RGB(27,28,30), NightText = RGB(226,230,230);
 HINSTANCE instance;
 HWND dock, editorWindow, managerWindow, titleBox, richEdit, listBox, searchBox, statusBox;
-HFONT uiFont, handFont;
+HFONT uiFont, handFont, titleFont, tabFont;
+HBRUSH paperBrush[8];
 HBRUSH nightBrush;
 HICON trayIcon;
 HMODULE richLibrary;
@@ -104,7 +105,7 @@ RECT workArea() { MONITORINFO info{}; info.cbSize = sizeof(info); GetMonitorInfo
 void setState(DeckState next) {
   state = next; RECT area = workArea();
   int height = std::min(540, static_cast<int>(area.bottom - area.top - 50));
-  int width = next == DeckState::Peek ? 280 : 34;
+  int width = next == DeckState::Peek ? 280 : 40;
   SetWindowPos(dock, HWND_TOPMOST, leftSide ? area.left : area.right - width, area.top + 80, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW);
   InvalidateRect(dock, nullptr, TRUE);
   if (next == DeckState::Editing) {
@@ -138,13 +139,13 @@ void command(int id) {
   if (store.deleted && GetTickCount64() >= store.deleted->expires) store.deleted.reset();
   auto* n = active();
   switch (id) {
-    case NewNote: { Note note; note.id = nextId++; note.title = "Untitled note"; note.color = static_cast<unsigned>(store.notes.size() % 8); activeId = note.id; store.notes.push_back(note); persist(); setState(DeckState::Editing); SetFocus(titleBox); SendMessageW(titleBox, EM_SETSEL, 0, -1); break; }
+    case NewNote: { Note note; note.id = nextId++; note.color = static_cast<unsigned>(store.notes.size() % 8); activeId = note.id; store.notes.push_back(note); persist(); setState(DeckState::Editing); SetFocus(titleBox); break; }
     case AllNotes: showManager(); break;
     case ArchiveView: showManager(FilterArchive); break;
-    case DeleteNote: if (n) { store.erase(n->id, GetTickCount64()); activeId = store.notes.empty() ? 0 : store.notes.front().id; persist(); refreshList(); if (active()) loadEditor(); else setState(DeckState::Collapsed); } break;
+    case DeleteNote: if (n) { store.erase(n->id, GetTickCount64()); activeId = 0; persist(); refreshList(); setState(DeckState::Collapsed); } break;
     case UndoDelete: if (store.deleted) { auto idToRestore = store.deleted->note.id; if (store.undo(GetTickCount64())) { activeId = idToRestore; persist(); refreshList(); setState(DeckState::Editing); } } break;
     case CycleColor: if (n) { n->color = (n->color + 1) % 8; persist(); loadEditor(); } break;
-    case RestoreNote: if (n) { n->archived = !n->archived; persist(); refreshList(); } break;
+    case RestoreNote: if (n) { n->archived = !n->archived; persist(); refreshList(); if (n->archived && IsWindowVisible(editorWindow)) setState(DeckState::Collapsed); } break;
     case DockLeft: leftSide = true; setState(state); break;
     case DockRight: leftSide = false; setState(state); break;
     case ExitApp: DestroyWindow(dock); break;
@@ -165,6 +166,11 @@ LRESULT CALLBACK editSubclass(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PT
     if (ctrl && wp == 'Z' && store.deleted) { command(UndoDelete); return 0; }
     if (ctrl && wp == 'B') { command(BoldText); return 0; }
     if (ctrl && wp == 'I') { command(ItalicText); return 0; }
+  }
+  if (msg == WM_CHAR && wp == VK_RETURN && hwnd == richEdit) {
+    auto res = DefSubclassProc(hwnd, msg, wp, lp);
+    CHARFORMAT2W fmt{}; fmt.cbSize = sizeof(fmt); fmt.dwMask = CFM_SIZE | CFM_BOLD; fmt.yHeight = 300; fmt.dwEffects = 0; SendMessageW(hwnd, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&fmt));
+    return res;
   }
   if (msg == WM_CHAR && wp == ' ' && hwnd == richEdit) {
     CHARRANGE selection{}; SendMessageW(hwnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selection));
@@ -202,20 +208,21 @@ void drawDock(HWND hwnd) {
   for (const auto& n : store.notes) {
     if (n.archived || shown >= 5) continue;
     RECT r{3, y, client.right - 2, y + 76}; auto brush = CreateSolidBrush(Paper[n.color % 8]); FillRect(dc, &r, brush); DeleteObject(brush); SetTextColor(dc, Ink);
-    auto label = wide(n.title.empty() ? "Untitled note" : n.title); if (state == DeckState::Collapsed || state == DeckState::Editing) label = label.substr(0, 1);
-    r.left += 6; r.right -= 5; DrawTextW(dc, label.c_str(), -1, &r, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS);
+    auto label = wide(n.title.empty() ? "Untitled note" : n.title);
+    if (state == DeckState::Peek) { r.left += 10; r.right -= 8; DrawTextW(dc, label.c_str(), -1, &r, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS); }
+    else { if (label.size() > 9) label = label.substr(0, 8) + L"\x2026"; HGDIOBJ old = SelectObject(dc, tabFont); RECT clip = r; IntersectClipRect(dc, clip.left, clip.top, clip.right, clip.bottom); TextOutW(dc, r.right - 9, y + 6, label.c_str(), static_cast<int>(label.size())); SelectClipRgn(dc, nullptr); SelectObject(dc, old); }
     y += 82; ++shown;
   }
-  RECT add{0, y, client.right, y + 35}; SetTextColor(dc, NightText); DrawTextW(dc, L"+", -1, &add, DT_CENTER | DT_VCENTER | DT_SINGLELINE); EndPaint(hwnd, &ps);
+  RECT add{0, y, client.right, y + 35}; SetTextColor(dc, NightText); HGDIOBJ oldAdd = SelectObject(dc, titleFont); DrawTextW(dc, L"+", -1, &add, DT_CENTER | DT_VCENTER | DT_SINGLELINE); SelectObject(dc, oldAdd); EndPaint(hwnd, &ps);
 }
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   if (msg == WM_CREATE) {
     auto cls = reinterpret_cast<CREATESTRUCTW*>(lp)->lpszClass;
     if (std::wcscmp(cls, L"EdgeEditor") == 0) {
-      titleBox = control(hwnd,L"EDIT",L"",ES_AUTOHSCROLL,1,20,12,340,30);
+      titleBox = control(hwnd,L"EDIT",L"",ES_AUTOHSCROLL,1,20,12,340,34); SendMessageW(titleBox,WM_SETFONT,reinterpret_cast<WPARAM>(titleFont),TRUE); SendMessageW(titleBox,EM_SETCUEBANNER,TRUE,reinterpret_cast<LPARAM>(L"Title")); SendMessageW(titleBox,EM_LIMITTEXT,200,0);
       const wchar_t* labels[] = {L"B",L"I",L"H",L"List",L"Color",L"Archive",L"Delete",L"Export"};
       int ids[] = {BoldText,ItalicText,HeadingText,BulletText,CycleColor,RestoreNote,DeleteNote,ExportNote};
-      for (int i=0;i<8;++i) control(hwnd,L"BUTTON",labels[i],BS_PUSHBUTTON,ids[i],15+i*57,50,54,26);
+      for (int i=0;i<8;++i) control(hwnd,L"BUTTON",labels[i],BS_PUSHBUTTON,ids[i],20+i*58,56,54,28);
       richEdit = control(hwnd,MSFTEDIT_CLASS,L"",ES_MULTILINE|ES_AUTOVSCROLL|WS_VSCROLL|ES_WANTRETURN,2,20,90,460,380);
       SendMessageW(richEdit,WM_SETFONT,reinterpret_cast<WPARAM>(handFont),TRUE); SendMessageW(richEdit,EM_SETEVENTMASK,0,ENM_CHANGE); SendMessageW(richEdit,EM_EXLIMITTEXT,0,16*1024*1024);
       statusBox = control(hwnd,L"STATIC",L"Saved locally",0,3,20,480,460,25);
@@ -233,14 +240,14 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   }
   switch(msg) {
     case WM_GETMINMAXINFO: if(hwnd==editorWindow || hwnd==managerWindow) { auto* limits=reinterpret_cast<MINMAXINFO*>(lp); limits->ptMinTrackSize.x=510; limits->ptMinTrackSize.y=350; } return 0;
-    case WM_SIZE: if (hwnd==editorWindow) { int w=LOWORD(lp),h=HIWORD(lp); MoveWindow(titleBox,20,12,w-40,30,TRUE); MoveWindow(richEdit,20,90,w-40,std::max(40,h-135),TRUE); MoveWindow(statusBox,20,h-32,w-40,24,TRUE); } else if(hwnd==managerWindow) { int w=LOWORD(lp),h=HIWORD(lp); MoveWindow(searchBox,20,65,w-40,30,TRUE); MoveWindow(listBox,20,110,w-40,std::max(30,h-130),TRUE); } return 0;
+    case WM_SIZE: if (hwnd==editorWindow) { int w=LOWORD(lp),h=HIWORD(lp); MoveWindow(titleBox,20,12,w-40,34,TRUE); MoveWindow(richEdit,20,96,w-40,std::max(40,h-140),TRUE); MoveWindow(statusBox,20,h-32,w-40,24,TRUE); } else if(hwnd==managerWindow) { int w=LOWORD(lp),h=HIWORD(lp); MoveWindow(searchBox,20,65,w-40,30,TRUE); MoveWindow(listBox,20,110,w-40,std::max(30,h-130),TRUE); } return 0;
     case WM_PAINT: if(hwnd==dock) { drawDock(hwnd); return 0; } break;
     case WM_ERASEBKGND: { RECT r; GetClientRect(hwnd,&r); if(hwnd==editorWindow && active()) { auto brush=CreateSolidBrush(Paper[active()->color%8]); FillRect(reinterpret_cast<HDC>(wp),&r,brush); DeleteObject(brush); } else FillRect(reinterpret_cast<HDC>(wp),&r,nightBrush); return 1; }
-    case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC: case WM_CTLCOLORLISTBOX: { HDC dc=reinterpret_cast<HDC>(wp); SetBkMode(dc,TRANSPARENT); if(hwnd==editorWindow && active()) { SetTextColor(dc,Ink); SetBkColor(dc,Paper[active()->color%8]); return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH)); } SetTextColor(dc,NightText); SetBkColor(dc,Night); return reinterpret_cast<LRESULT>(nightBrush); }
+    case WM_CTLCOLOREDIT: case WM_CTLCOLORSTATIC: case WM_CTLCOLORLISTBOX: { HDC dc=reinterpret_cast<HDC>(wp); SetBkMode(dc,TRANSPARENT); if(hwnd==editorWindow && active()) { SetBkMode(dc,OPAQUE); SetTextColor(dc,Ink); SetBkColor(dc,Paper[active()->color%8]); return reinterpret_cast<LRESULT>(paperBrush[active()->color%8]); } SetTextColor(dc,NightText); SetBkColor(dc,Night); return reinterpret_cast<LRESULT>(nightBrush); }
     case WM_COMMAND: if(hwnd==editorWindow && HIWORD(wp)==EN_CHANGE) saveEditor(); else if(hwnd==managerWindow && LOWORD(wp)==4 && HIWORD(wp)==EN_CHANGE) refreshList(); else if(hwnd==managerWindow && LOWORD(wp)==5 && HIWORD(wp)==LBN_DBLCLK) { auto row=SendMessageW(listBox,LB_GETCURSEL,0,0); if(row>=0 && static_cast<std::size_t>(row)<rows.size()) { activeId=rows[row]; ShowWindow(managerWindow,SW_HIDE); setState(DeckState::Editing); } } else if(HIWORD(wp)==BN_CLICKED) command(LOWORD(wp)); return 0;
     case WM_MOUSEMOVE: if(hwnd==dock) { if(state==DeckState::Collapsed) setState(DeckState::Peek); TRACKMOUSEEVENT track{sizeof(track),TME_LEAVE,hwnd,0}; TrackMouseEvent(&track); } return 0;
     case WM_MOUSELEAVE: if(hwnd==dock && state==DeckState::Peek) setState(DeckState::Collapsed); return 0;
-    case WM_LBUTTONUP: if(hwnd==dock) { int row=(GET_Y_LPARAM(lp)-6)/82,shown=0; for(const auto& n:store.notes) { if(n.archived || shown>=5) continue; if(shown++==row) { activeId=n.id; setState(DeckState::Editing); return 0; } } command(NewNote); } return 0;
+    case WM_LBUTTONUP: if(hwnd==dock) { int row=(GET_Y_LPARAM(lp)-6)/82,shown=0; for(const auto& n:store.notes) { if(n.archived || shown>=5) continue; if(shown++==row) { activeId=n.id; setState(DeckState::Editing); return 0; } } int addTop=6+shown*82; if(GET_Y_LPARAM(lp)>=addTop && GET_Y_LPARAM(lp)<addTop+40) command(NewNote); } return 0;
     case WM_RBUTTONUP: menu(hwnd); return 0;
     case WM_ACTIVATE: if(hwnd==editorWindow && !modalOpen && LOWORD(wp)==WA_INACTIVE && reinterpret_cast<HWND>(lp)!=managerWindow) setState(DeckState::Collapsed); return 0;
     case WM_HOTKEY: if(wp==1) command(NewNote); else if(wp==2) command(AllNotes); else if(wp==3) command(ArchiveView); else setState(state==DeckState::Collapsed?DeckState::Peek:DeckState::Collapsed); return 0;
@@ -259,14 +266,16 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
   INITCOMMONCONTROLSEX controls{sizeof(controls),ICC_STANDARD_CLASSES}; InitCommonControlsEx(&controls);
   uiFont=CreateFontW(-14,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
   handFont=CreateFontW(-20,0,0,0,FW_NORMAL,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe Print"); nightBrush=CreateSolidBrush(Night);
+  titleFont=CreateFontW(-22,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+  tabFont=CreateFontW(-13,0,2700,2700,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Segoe UI");
+  for(int i=0;i<8;++i) paperBrush[i]=CreateSolidBrush(Paper[i]);
   PWSTR local=nullptr; if(FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData,0,nullptr,&local))) return 1;
   std::wstring dir=std::wstring(local)+L"\\EdgeNotes"; CoTaskMemFree(local); CreateDirectoryW(dir.c_str(),nullptr); storagePath=dir+L"\\notes.enotes";
   HANDLE file=CreateFileW(storagePath.c_str(),GENERIC_READ,FILE_SHARE_READ,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
   if(file!=INVALID_HANDLE_VALUE) { LARGE_INTEGER size{}; if(GetFileSizeEx(file,&size) && size.QuadPart>0 && size.QuadPart<128*1024*1024) { std::string bytes(static_cast<std::size_t>(size.QuadPart),'\0'); DWORD read=0; if(ReadFile(file,bytes.data(),static_cast<DWORD>(bytes.size()),&read,nullptr) && read==bytes.size()) { try { store.notes=edgenotes::decode(bytes); } catch(...) { MessageBoxW(nullptr,L"The notes file could not be read. It has not been overwritten.",L"EdgeNotes",MB_ICONERROR); CloseHandle(file); return 2; } } else { CloseHandle(file); return 2; } } else { CloseHandle(file); return 2; } CloseHandle(file); }
   else if(GetLastError()!=ERROR_FILE_NOT_FOUND) { MessageBoxW(nullptr,L"Your notes file could not be opened. EdgeNotes will not overwrite it.",L"EdgeNotes",MB_ICONERROR); return 2; }
   for(const auto& n:store.notes) nextId=std::max(nextId,n.id+1);
-  if(store.notes.empty()) { store.notes.push_back({nextId++,"A passing thought","A fresh page, just for you.","",0,false}); }
-  activeId=store.notes.front().id;
+  activeId=store.notes.empty()?0:store.notes.front().id;
   for(auto cls:{L"EdgeDock",L"EdgeEditor",L"EdgeManager"}) { WNDCLASSW wc{}; wc.lpfnWndProc=wndProc; wc.hInstance=inst; wc.lpszClassName=cls; wc.hCursor=LoadCursorW(nullptr,IDC_ARROW); wc.hIcon=LoadIconW(nullptr,IDI_APPLICATION); RegisterClassW(&wc); }
   dock=CreateWindowExW(WS_EX_TOOLWINDOW|WS_EX_TOPMOST,L"EdgeDock",L"EdgeNotes deck",WS_POPUP,0,0,34,540,nullptr,nullptr,inst,nullptr);
   editorWindow=CreateWindowExW(WS_EX_TOOLWINDOW,L"EdgeEditor",L"EdgeNotes",WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_THICKFRAME,100,100,510,540,nullptr,nullptr,inst,nullptr);
@@ -280,5 +289,5 @@ int WINAPI wWinMain(HINSTANCE inst,HINSTANCE,LPWSTR,int) {
   MSG message{}; int result; while((result=GetMessageW(&message,nullptr,0,0))>0) { TranslateMessage(&message); DispatchMessageW(&message); }
   if(IsWindow(editorWindow)) DestroyWindow(editorWindow);
   if(IsWindow(managerWindow)) DestroyWindow(managerWindow);
-  DeleteObject(uiFont); DeleteObject(handFont); DeleteObject(nightBrush); FreeLibrary(richLibrary); if(singleton) CloseHandle(singleton); return result<0?1:0;
+  DeleteObject(uiFont); DeleteObject(handFont); DeleteObject(nightBrush); DeleteObject(titleFont); DeleteObject(tabFont); for(auto b:paperBrush) DeleteObject(b); FreeLibrary(richLibrary); if(singleton) CloseHandle(singleton); return result<0?1:0;
 }
