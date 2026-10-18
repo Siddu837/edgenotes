@@ -29,6 +29,7 @@
 #pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "uxtheme.lib")
 #pragma comment(lib, "msimg32.lib")
+#pragma comment(lib, "advapi32.lib")
 
 namespace {
 
@@ -68,6 +69,28 @@ enum {
     CmdUnpinDrawer,     // Unpin the drawer
     CmdAddToDesktop,    // Create desktop shortcut
     CmdPromptDesktopShortcut, // First run shortcut prompt
+    CmdStrikeText,
+    CmdNumberedList,
+    CmdStartWithWindows,
+    CmdInsertLink,
+    CmdUndoText,
+    CmdRedoText,
+    CmdCodeBlock,
+    CmdMoreMenu,
+    CmdDuplicateNote,
+    CmdMoveToTasks,
+    CmdMoveToNotes,
+    CmdMoveToThoughts,
+    CmdMoveToArchive,
+    CmdPortableMode,
+    CmdSortOrder,
+    CmdSortRecentlyEdited,
+    CmdSortTitle,
+    CmdImportNotes,
+    CmdExportBackupJson,
+    CmdFilterTasks,
+    CmdFilterNotes,
+    CmdFilterThoughts,
     CmdColorBase = 200  // 200..207 for 8 paper colors
 };
 
@@ -114,21 +137,25 @@ int hoveredTabIndex = -1; // -1 none, 0..4 notes, 100 add, 101 theme, 102 settin
 bool dockSettingsPopupOpen = false;
 int hoveredPeekCard = -1;
 int hoveredManagerRow = -1;
+int hoveredToolbarBtn = 0;
 int activeColorSwatch = 0;
-int activeDeck = 0; // 0: WORK, 1: PERSONAL, 2: SCRATCHPAD, 3: IDEAS, 4: ARCHIVE
+int activeDeck = 0; // 0: TASKS, 1: NOTES, 2: THOUGHTS, 3: ARCHIVE
+int managerSortMode = 0; // 0: Recently edited, 1: Title A-Z, 2: My order
+int lastAutoFormatLine = -1;
+std::wstring lastAutoFormatPrefix;
 
 struct DeckDef {
     const wchar_t* name;
     const wchar_t* titleName;
+    const wchar_t* symbol;
     COLORREF color;
 };
 
-const DeckDef DeckList[5] = {
-    { L"WORK",       L"Work",       RGB(167, 243, 208) }, // Mint (#A7F3D0)
-    { L"PERSONAL",   L"Personal",   RGB(186, 230, 253) }, // Sky (#BAE6FD)
-    { L"SCRATCHPAD", L"Scratchpad", RGB(254, 240, 138) }, // Yellow (#FEF08A)
-    { L"IDEAS",      L"Ideas",      RGB(254, 205, 211) }, // Rose / Pink (#FECDD3)
-    { L"ARCHIVE",    L"Archive",    RGB(233, 213, 255) }  // Lavender (#E9D5FF)
+const DeckDef DeckList[4] = {
+    { L"TASKS",     L"Tasks",     L"\x2611", RGB(167, 243, 208) }, // \u2611 Mint
+    { L"NOTES",     L"Notes",     L"\x2630", RGB(186, 230, 253) }, // \u2630 Sky
+    { L"THOUGHTS",  L"Thoughts",  L"\x2726", RGB(254, 205, 211) }, // \u2726 Rose
+    { L"ARCHIVE",   L"Archive",   L"\x25A3", RGB(233, 213, 255) }  // \u25A3 Lavender
 };
 std::string hotkeyCollisionNotice;
 
@@ -245,15 +272,14 @@ std::vector<Note*> GetDeckNotes() {
 std::vector<Note*> GetNotesForActiveDeck() {
     std::vector<Note*> result;
     for (auto& n : store.notes) {
-        if (activeDeck == 4) {
+        if (activeDeck == 3) { // Archive
             if (n.archived) result.push_back(&n);
         } else {
             if (!n.archived) {
                 int mapped = 0;
-                if (n.color == 1) mapped = 1;
-                else if (n.color == 3) mapped = 2;
-                else if (n.color == 4) mapped = 3;
-                else mapped = 0;
+                if (n.color == 1) mapped = 1;       // Sky -> Notes
+                else if (n.color == 4) mapped = 2;   // Rose -> Thoughts
+                else mapped = 0;                      // Everything else -> Tasks
                 if (mapped == activeDeck) result.push_back(&n);
             }
         }
@@ -411,8 +437,8 @@ void UpdateDockGeometry() {
     int iconBtnSize = Scale(dockHwnd, 30);
     int iconGap = Scale(dockHwnd, 6);
 
-    // Grip + 5 deck tabs + gap + [+] + [theme] + [settings] + margins
-    int totalLen = gripSize + gap + (5 * (pillLen + gap)) + Scale(dockHwnd, 10) + (3 * (iconBtnSize + iconGap)) + Scale(dockHwnd, 12);
+    // Grip + 4 deck tabs + gap + [+] + [theme] + [pin] + [settings] + margins
+    int totalLen = gripSize + gap + (4 * (pillLen + gap)) + Scale(dockHwnd, 10) + (4 * (iconBtnSize + iconGap)) + Scale(dockHwnd, 12);
 
     int x = 0, y = 0, w = 0, h = 0;
     if (isVertical) {
@@ -520,7 +546,14 @@ void SetAppState(AppState next, bool force) {
     } else if (next == AppState::Peek) {
         ShowWindow(editorHwnd, SW_HIDE);
         UpdatePeekGeometry();
-        ShowWindow(peekHwnd, SW_SHOW);
+        DWORD animFlags = AW_SLIDE | AW_ACTIVATE;
+        if (config.side == DockSide::Left) animFlags |= AW_HOR_POSITIVE;
+        else if (config.side == DockSide::Right) animFlags |= AW_HOR_NEGATIVE;
+        else if (config.side == DockSide::Top) animFlags |= AW_VER_POSITIVE;
+        else animFlags |= AW_VER_NEGATIVE;
+        if (!AnimateWindow(peekHwnd, 120, animFlags)) {
+            ShowWindow(peekHwnd, SW_SHOW);
+        }
         SetForegroundWindow(peekHwnd);
         InvalidateRect(peekHwnd, nullptr, TRUE);
     } else if (next == AppState::Editing) {
@@ -584,6 +617,252 @@ void CreateDesktopShortcut() {
     CoUninitialize();
 }
 
+bool IsStartWithWindowsEnabled() {
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        DWORD type = 0;
+        DWORD size = 0;
+        LONG res = RegQueryValueExW(hKey, L"EdgeNotes", nullptr, &type, nullptr, &size);
+        RegCloseKey(hKey);
+        return (res == ERROR_SUCCESS);
+    }
+    return false;
+}
+
+void ToggleStartWithWindows() {
+    HKEY hKey = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
+        if (IsStartWithWindowsEnabled()) {
+            RegDeleteValueW(hKey, L"EdgeNotes");
+        } else {
+            wchar_t exePath[MAX_PATH]{};
+            GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+            std::wstring quoted = L"\"" + std::wstring(exePath) + L"\"";
+            RegSetValueExW(hKey, L"EdgeNotes", 0, REG_SZ, reinterpret_cast<const BYTE*>(quoted.c_str()), static_cast<DWORD>((quoted.size() + 1) * sizeof(wchar_t)));
+        }
+        RegCloseKey(hKey);
+    }
+}
+
+std::wstring GetExeDir() {
+    wchar_t exePath[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring exeDir = exePath;
+    size_t lastSlash = exeDir.find_last_of(L"\\/");
+    if (lastSlash != std::wstring::npos) exeDir = exeDir.substr(0, lastSlash);
+    return exeDir;
+}
+
+bool CheckIsPortableMode() {
+    std::wstring exeDir = GetExeDir();
+    return (GetFileAttributesW((exeDir + L"\\portable.flag").c_str()) != INVALID_FILE_ATTRIBUTES) ||
+           (GetFileAttributesW((exeDir + L"\\notes.enotes").c_str()) != INVALID_FILE_ATTRIBUTES);
+}
+
+void TogglePortableMode() {
+    std::wstring exeDir = GetExeDir();
+    std::wstring flagFile = exeDir + L"\\portable.flag";
+    if (GetFileAttributesW(flagFile.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        DeleteFileW(flagFile.c_str());
+        MessageBoxW(dockHwnd, L"Portable mode disabled. Notes will use %LocalAppData% on restart.", L"EdgeNotes", MB_ICONINFORMATION);
+    } else {
+        HANDLE h = CreateFileW(flagFile.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+        AtomicWriteFile(exeDir + L"\\notes.enotes", edgenotes::encode(store.notes));
+        MessageBoxW(dockHwnd, L"Portable mode enabled! Notes will be saved next to EdgeNotes.exe.", L"EdgeNotes", MB_ICONINFORMATION);
+    }
+}
+
+bool IsForegroundAppFullscreen() {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == dockHwnd || fg == peekHwnd || fg == editorHwnd || fg == managerHwnd) return false;
+    HMONITOR hMon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{ sizeof(mi) };
+    if (GetMonitorInfoW(hMon, &mi)) {
+        RECT fgRect;
+        if (GetWindowRect(fg, &fgRect)) {
+            if (fgRect.left <= mi.rcMonitor.left && fgRect.top <= mi.rcMonitor.top &&
+                fgRect.right >= mi.rcMonitor.right && fgRect.bottom >= mi.rcMonitor.bottom) {
+                wchar_t className[64]{};
+                GetClassNameW(fg, className, 64);
+                if (wcscmp(className, L"Progman") != 0 && wcscmp(className, L"WorkerW") != 0 && wcscmp(className, L"Shell_TrayWnd") != 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+std::string NotesToJson(const std::vector<Note>& notes) {
+    std::string json = "[\n";
+    for (size_t i = 0; i < notes.size(); ++i) {
+        const auto& n = notes[i];
+        json += "  {\n";
+        json += "    \"id\": " + std::to_string(n.id) + ",\n";
+        json += "    \"title\": \"";
+        for (char c : n.title) {
+            if (c == '"') json += "\\\"";
+            else if (c == '\\') json += "\\\\";
+            else if (c == '\n') json += "\\n";
+            else if (c == '\r') json += "\\r";
+            else if (c == '\t') json += "\\t";
+            else json.push_back(c);
+        }
+        json += "\",\n";
+        json += "    \"body\": \"";
+        for (char c : n.body) {
+            if (c == '"') json += "\\\"";
+            else if (c == '\\') json += "\\\\";
+            else if (c == '\n') json += "\\n";
+            else if (c == '\r') json += "\\r";
+            else if (c == '\t') json += "\\t";
+            else json.push_back(c);
+        }
+        json += "\",\n";
+        json += "    \"color\": " + std::to_string(n.color) + ",\n";
+        json += "    \"archived\": " + std::string(n.archived ? "true" : "false") + "\n";
+        json += (i + 1 == notes.size()) ? "  }\n" : "  },\n";
+    }
+    json += "]\n";
+    return json;
+}
+
+void ExportBackupJson() {
+    wchar_t path[MAX_PATH] = L"EdgeNotes-backup.json";
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = managerHwnd ? managerHwnd : dockHwnd;
+    ofn.lpstrFilter = L"JSON Backup (*.json)\0*.json\0\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_OVERWRITEPROMPT;
+    ofn.lpstrDefExt = L"json";
+    isModalOpen = true;
+    if (GetSaveFileNameW(&ofn)) {
+        std::string json = NotesToJson(store.notes);
+        if (AtomicWriteFile(path, json)) {
+            MessageBoxW(ofn.hwndOwner, L"Backup exported successfully!", L"EdgeNotes", MB_ICONINFORMATION);
+        } else {
+            MessageBoxW(ofn.hwndOwner, L"Failed to write backup file.", L"EdgeNotes", MB_ICONERROR);
+        }
+    }
+    isModalOpen = false;
+}
+
+void ImportNotesFromFile() {
+    wchar_t path[MAX_PATH] = L"";
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = managerHwnd ? managerHwnd : dockHwnd;
+    ofn.lpstrFilter = L"Supported Files (*.md;*.txt;*.json)\0*.md;*.txt;*.json\0Markdown (*.md)\0*.md\0Plain Text (*.txt)\0*.txt\0JSON Backup (*.json)\0*.json\0\0";
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST;
+    isModalOpen = true;
+    if (GetOpenFileNameW(&ofn)) {
+        HANDLE hFile = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER sz{};
+            if (GetFileSizeEx(hFile, &sz) && sz.QuadPart > 0 && sz.QuadPart < 32 * 1024 * 1024) {
+                std::string content(static_cast<size_t>(sz.QuadPart), '\0');
+                DWORD read = 0;
+                ReadFile(hFile, &content[0], static_cast<DWORD>(content.size()), &read, nullptr);
+                CloseHandle(hFile);
+
+                std::wstring wpath(path);
+                bool isJson = (wpath.size() >= 5 && _wcsicmp(wpath.c_str() + wpath.size() - 5, L".json") == 0);
+                if (isJson) {
+                    size_t pos = 0;
+                    int importedCount = 0;
+                    while ((pos = content.find("\"title\":", pos)) != std::string::npos) {
+                        pos += 8;
+                        while (pos < content.size() && (content[pos] == ' ' || content[pos] == '\t' || content[pos] == '"')) pos++;
+                        size_t endTitle = content.find("\"", pos);
+                        if (endTitle == std::string::npos) break;
+                        std::string title = content.substr(pos, endTitle - pos);
+                        pos = endTitle + 1;
+
+                        size_t bodyPos = content.find("\"body\":", pos);
+                        if (bodyPos == std::string::npos) break;
+                        bodyPos += 7;
+                        while (bodyPos < content.size() && (content[bodyPos] == ' ' || content[bodyPos] == '\t' || content[bodyPos] == '"')) bodyPos++;
+                        size_t endBody = content.find("\"", bodyPos);
+                        if (endBody == std::string::npos) break;
+                        std::string body = content.substr(bodyPos, endBody - bodyPos);
+                        pos = endBody + 1;
+
+                        Note n;
+                        n.id = nextId++;
+                        n.title = title.empty() ? "Imported note" : title;
+                        n.body = body;
+                        n.color = (activeDeck == 0 ? 0 : activeDeck == 1 ? 1 : activeDeck == 2 ? 4 : 2);
+                        n.archived = false;
+                        store.notes.push_back(n);
+                        importedCount++;
+                    }
+                    PersistStore();
+                    RefreshManagerList();
+                    std::wstring msg = L"Imported " + std::to_wstring(importedCount) + L" notes!";
+                    MessageBoxW(ofn.hwndOwner, msg.c_str(), L"EdgeNotes", MB_ICONINFORMATION);
+                } else {
+                    std::string title = "Imported Note";
+                    std::string body = content;
+                    size_t firstNewline = content.find_first_of("\r\n");
+                    std::string firstLine = (firstNewline != std::string::npos) ? content.substr(0, firstNewline) : content;
+                    if (firstLine.rfind("# ", 0) == 0) {
+                        title = firstLine.substr(2);
+                        body = (firstNewline != std::string::npos) ? content.substr(firstNewline + 1) : "";
+                        while (!body.empty() && (body.front() == '\r' || body.front() == '\n')) body.erase(0, 1);
+                    } else if (!firstLine.empty() && firstLine.size() <= 80) {
+                        title = firstLine;
+                    }
+                    Note n;
+                    n.id = nextId++;
+                    n.title = title;
+                    n.body = body;
+                    n.color = (activeDeck == 0 ? 0 : activeDeck == 1 ? 1 : activeDeck == 2 ? 4 : 2);
+                    n.archived = false;
+                    store.notes.push_back(n);
+                    PersistStore();
+                    RefreshManagerList();
+                    MessageBoxW(ofn.hwndOwner, L"Note imported successfully!", L"EdgeNotes", MB_ICONINFORMATION);
+                }
+            } else {
+                CloseHandle(hFile);
+            }
+        }
+    }
+    isModalOpen = false;
+}
+
+void ShowEditorMoreMenu() {
+    auto* n = GetActiveNote();
+    if (!n) return;
+    HMENU m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, CmdDuplicateNote, L"Duplicate note");
+
+    HMENU moveSub = CreatePopupMenu();
+    AppendMenuW(moveSub, MF_STRING, CmdMoveToTasks, L"\x2611  Tasks");
+    AppendMenuW(moveSub, MF_STRING, CmdMoveToNotes, L"\x2630  Notes");
+    AppendMenuW(moveSub, MF_STRING, CmdMoveToThoughts, L"\x2726  Thoughts");
+    AppendMenuW(moveSub, MF_STRING, CmdMoveToArchive, L"\x25A3  Archive");
+    AppendMenuW(m, MF_POPUP, reinterpret_cast<UINT_PTR>(moveSub), L"Move to deck");
+
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, CmdExportNote, L"Export note\x2026");
+    AppendMenuW(m, MF_STRING, CmdDeleteNote, L"Delete note\tCtrl+BkSp");
+
+    POINT pt;
+    GetCursorPos(&pt);
+    SetForegroundWindow(editorHwnd);
+    isModalOpen = true;
+    int choice = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, editorHwnd, nullptr);
+    DestroyMenu(m);
+    isModalOpen = false;
+    if (choice) ExecuteCommand(choice);
+}
+
 void ShowDockSettingsPopup() {
     dockSettingsPopupOpen = true;
     HMENU m = CreatePopupMenu();
@@ -597,7 +876,9 @@ void ShowDockSettingsPopup() {
     AppendMenuW(m, MF_STRING | (config.side == DockSide::Bottom ? MF_CHECKED : 0), CmdDockBottom, L"\x2193  Dock on bottom");
 
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING | (config.pinned ? MF_CHECKED : 0), CmdUnpinDrawer, L"\x21F9  Unpin drawer");
+    AppendMenuW(m, MF_STRING | (config.pinned ? MF_CHECKED : 0), CmdUnpinDrawer, L"\x21F9  Pin dock open");
+    AppendMenuW(m, MF_STRING | (IsStartWithWindowsEnabled() ? MF_CHECKED : 0), CmdStartWithWindows, L"Start with Windows");
+    AppendMenuW(m, MF_STRING | (CheckIsPortableMode() ? MF_CHECKED : 0), CmdPortableMode, L"Portable mode");
 
     if (store.deleted && GetTickCount64() < store.deleted->expires) {
         AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
@@ -632,6 +913,10 @@ void ShowTrayContextMenu() {
     AppendMenuW(sub, MF_STRING | (config.side == DockSide::Bottom ? MF_CHECKED : 0), CmdDockBottom, L"Bottom");
     AppendMenuW(m, MF_POPUP, reinterpret_cast<UINT_PTR>(sub), L"Dock position");
 
+    AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING | (IsStartWithWindowsEnabled() ? MF_CHECKED : 0), CmdStartWithWindows, L"Start with Windows");
+    AppendMenuW(m, MF_STRING | (CheckIsPortableMode() ? MF_CHECKED : 0), CmdPortableMode, L"Portable mode");
+
     if (store.deleted && GetTickCount64() < store.deleted->expires) {
         AppendMenuW(m, MF_STRING, CmdUndoDelete, L"Undo deletion\tCtrl+Z");
     }
@@ -657,8 +942,8 @@ void ExecuteCommand(int id) {
         case CmdNewNote: {
             Note note;
             note.id = nextId++;
-            note.color = (activeDeck == 0 ? 0 : activeDeck == 1 ? 1 : activeDeck == 2 ? 3 : activeDeck == 3 ? 4 : 2);
-            note.archived = (activeDeck == 4);
+            note.color = (activeDeck == 0 ? 0 : activeDeck == 1 ? 1 : activeDeck == 2 ? 4 : 2);
+            note.archived = (activeDeck == 3);
             note.title = "Untitled note";
             activeId = note.id;
             store.notes.push_back(note);
@@ -763,9 +1048,11 @@ void ExecuteCommand(int id) {
             if (!isDockVisible) SetAppState(AppState::Collapsed);
             break;
         }
-        case CmdPinEditor: {
+        case CmdPinEditor:
+        case CmdUnpinDrawer: {
             config.pinned = !config.pinned;
             config.save(configPath);
+            if (dockHwnd) InvalidateRect(dockHwnd, nullptr, TRUE);
             if (editorHwnd) {
                 SetWindowPos(editorHwnd, config.pinned ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 InvalidateRect(editorHwnd, nullptr, TRUE);
@@ -782,15 +1069,6 @@ void ExecuteCommand(int id) {
             InvalidateRect(dockHwnd, nullptr, TRUE);
             if (peekHwnd && IsWindowVisible(peekHwnd)) InvalidateRect(peekHwnd, nullptr, TRUE);
             if (editorHwnd && IsWindowVisible(editorHwnd)) InvalidateRect(editorHwnd, nullptr, TRUE);
-            break;
-        }
-        case CmdUnpinDrawer: {
-            config.pinned = !config.pinned;
-            config.save(configPath);
-            if (editorHwnd) {
-                SetWindowPos(editorHwnd, config.pinned ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                InvalidateRect(editorHwnd, nullptr, TRUE);
-            }
             break;
         }
         case CmdAddToDesktop: {
@@ -814,6 +1092,7 @@ void ExecuteCommand(int id) {
         }
         case CmdBoldText: ApplyFormat(CFM_BOLD, CFE_BOLD); break;
         case CmdItalicText: ApplyFormat(CFM_ITALIC, CFE_ITALIC); break;
+        case CmdStrikeText: ApplyFormat(CFM_STRIKEOUT, CFE_STRIKEOUT); break;
         case CmdHeading1: ApplyFontSizeAndWeight(480, CFE_BOLD); break; // 24pt
         case CmdHeading2: ApplyFontSizeAndWeight(380, CFE_BOLD); break; // 19pt
         case CmdHeading3: ApplyFontSizeAndWeight(320, CFE_BOLD); break; // 16pt
@@ -833,6 +1112,139 @@ void ExecuteCommand(int id) {
             SendMessageW(richEditHwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"\x25A2 "));
             SaveEditorContent();
             SetFocus(richEditHwnd);
+            break;
+        }
+        case CmdNumberedList: {
+            PARAFORMAT2 fmt{};
+            fmt.cbSize = sizeof(fmt);
+            fmt.dwMask = PFM_NUMBERING;
+            fmt.wNumbering = 2; // PFN_ARABIC
+            SendMessageW(richEditHwnd, EM_SETPARAFORMAT, 0, reinterpret_cast<LPARAM>(&fmt));
+            SaveEditorContent();
+            SetFocus(richEditHwnd);
+            break;
+        }
+        case CmdInsertLink: {
+            CHARRANGE sel{};
+            SendMessageW(richEditHwnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&sel));
+            if (sel.cpMin != sel.cpMax) {
+                ApplyFormat(CFM_LINK | CFM_UNDERLINE, CFE_LINK | CFE_UNDERLINE);
+            } else {
+                SendMessageW(richEditHwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"https://"));
+                SaveEditorContent();
+            }
+            SetFocus(richEditHwnd);
+            break;
+        }
+        case CmdUndoText: {
+            SendMessageW(richEditHwnd, EM_UNDO, 0, 0);
+            SaveEditorContent();
+            SetFocus(richEditHwnd);
+            break;
+        }
+        case CmdRedoText: {
+            SendMessageW(richEditHwnd, EM_REDO, 0, 0);
+            SaveEditorContent();
+            SetFocus(richEditHwnd);
+            break;
+        }
+        case CmdCodeBlock: {
+            CHARFORMAT2W fmt{};
+            fmt.cbSize = sizeof(fmt);
+            fmt.dwMask = CFM_FACE | CFM_SIZE;
+            fmt.yHeight = 220; // 11pt
+            lstrcpyW(fmt.szFaceName, L"Consolas");
+            SendMessageW(richEditHwnd, EM_SETCHARFORMAT, SCF_SELECTION, reinterpret_cast<LPARAM>(&fmt));
+            SendMessageW(richEditHwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"```\r\n// code\r\n```\r\n"));
+            SaveEditorContent();
+            SetFocus(richEditHwnd);
+            break;
+        }
+        case CmdStartWithWindows: {
+            ToggleStartWithWindows();
+            break;
+        }
+        case CmdPortableMode: {
+            TogglePortableMode();
+            break;
+        }
+        case CmdMoreMenu: {
+            ShowEditorMoreMenu();
+            break;
+        }
+        case CmdDuplicateNote: {
+            if (n) {
+                Note dup = *n;
+                dup.id = nextId++;
+                dup.title += " (Copy)";
+                store.notes.push_back(dup);
+                activeId = dup.id;
+                PersistStore();
+                RefreshManagerList();
+                LoadActiveNoteIntoEditor();
+            }
+            break;
+        }
+        case CmdMoveToTasks: {
+            if (n) {
+                n->color = 0;
+                n->archived = false;
+                PersistStore();
+                RefreshManagerList();
+                InvalidateRect(editorHwnd, nullptr, TRUE);
+            }
+            break;
+        }
+        case CmdMoveToNotes: {
+            if (n) {
+                n->color = 1;
+                n->archived = false;
+                PersistStore();
+                RefreshManagerList();
+                InvalidateRect(editorHwnd, nullptr, TRUE);
+            }
+            break;
+        }
+        case CmdMoveToThoughts: {
+            if (n) {
+                n->color = 4;
+                n->archived = false;
+                PersistStore();
+                RefreshManagerList();
+                InvalidateRect(editorHwnd, nullptr, TRUE);
+            }
+            break;
+        }
+        case CmdMoveToArchive: {
+            if (n) {
+                n->archived = true;
+                PersistStore();
+                RefreshManagerList();
+                SetAppState(AppState::Collapsed);
+            }
+            break;
+        }
+        case CmdImportNotes: {
+            ImportNotesFromFile();
+            break;
+        }
+        case CmdExportBackupJson: {
+            ExportBackupJson();
+            break;
+        }
+        case CmdSortRecentlyEdited: {
+            managerSortMode = 0;
+            RefreshManagerList();
+            break;
+        }
+        case CmdSortTitle: {
+            managerSortMode = 1;
+            RefreshManagerList();
+            break;
+        }
+        case CmdSortOrder: {
+            managerSortMode = 2;
+            RefreshManagerList();
             break;
         }
         case CmdExportNote: {
@@ -893,6 +1305,7 @@ void ExecuteCommand(int id) {
 LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
     if (msg == WM_KEYDOWN) {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
         if (wp == VK_ESCAPE) {
             SetAppState(AppState::Collapsed);
             return 0;
@@ -905,17 +1318,50 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
             ExecuteCommand(CmdCycleColor);
             return 0;
         }
-        if (ctrl && wp == 'Z' && store.deleted) {
+        if (ctrl && !shift && wp == 'Z' && store.deleted) {
             ExecuteCommand(CmdUndoDelete);
             return 0;
         }
-        if (ctrl && wp == 'B') {
+        if (ctrl && !shift && wp == 'B') {
             ExecuteCommand(CmdBoldText);
             return 0;
         }
-        if (ctrl && wp == 'I') {
+        if (ctrl && !shift && wp == 'I') {
             ExecuteCommand(CmdItalicText);
             return 0;
+        }
+        if (ctrl && !shift && wp == 'K') {
+            ExecuteCommand(CmdInsertLink);
+            return 0;
+        }
+        if (ctrl && shift && (wp == '8')) {
+            ExecuteCommand(CmdBulletText);
+            return 0;
+        }
+        if (ctrl && shift && (wp == 'L')) {
+            ExecuteCommand(CmdChecklistText);
+            return 0;
+        }
+        if (ctrl && shift && (wp == 'X' || wp == 'S')) {
+            ExecuteCommand(CmdStrikeText);
+            return 0;
+        }
+        if (ctrl && (wp == 'Y' || (shift && wp == 'Z'))) {
+            ExecuteCommand(CmdRedoText);
+            return 0;
+        }
+        if (wp == VK_BACK && !lastAutoFormatPrefix.empty() && hwnd == richEditHwnd) {
+            CHARRANGE sel{};
+            SendMessageW(hwnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&sel));
+            LONG currentLine = static_cast<LONG>(SendMessageW(hwnd, EM_LINEFROMCHAR, sel.cpMin, 0));
+            LONG start = static_cast<LONG>(SendMessageW(hwnd, EM_LINEINDEX, currentLine, 0));
+            if (currentLine == lastAutoFormatLine && sel.cpMin == start) {
+                ExecuteCommand(CmdNormalText);
+                SendMessageW(hwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>((lastAutoFormatPrefix + L" ").c_str()));
+                lastAutoFormatPrefix.clear();
+                lastAutoFormatLine = -1;
+                return 0;
+            }
         }
         if (hwnd == titleBoxHwnd && (wp == VK_RETURN || wp == VK_DOWN)) {
             SetFocus(richEditHwnd);
@@ -925,6 +1371,8 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
 
     // Enter in RichEdit after a heading returns formatting to normal body text
     if (msg == WM_CHAR && wp == VK_RETURN && hwnd == richEditHwnd) {
+        lastAutoFormatPrefix.clear();
+        lastAutoFormatLine = -1;
         auto res = DefSubclassProc(hwnd, msg, wp, lp);
         CHARFORMAT2W fmt{};
         fmt.cbSize = sizeof(fmt);
@@ -935,7 +1383,7 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
         return res;
     }
 
-    // Auto-formatting triggers: "# ", "## ", "### ", "- ", "* ", "[] "
+    // Auto-formatting triggers: "# ", "## ", "### ", "- ", "* ", "[] ", "1. "
     if (msg == WM_CHAR && wp == ' ' && hwnd == richEditHwnd) {
         CHARRANGE selection{};
         SendMessageW(hwnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selection));
@@ -947,7 +1395,9 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
             TEXTRANGEW range{{start, selection.cpMin}, buf};
             SendMessageW(hwnd, EM_GETTEXTRANGE, 0, reinterpret_cast<LPARAM>(&range));
             std::wstring trigger(buf);
-            if (trigger == L"#" || trigger == L"##" || trigger == L"###" || trigger == L"-" || trigger == L"*" || trigger == L"[]") {
+            if (trigger == L"#" || trigger == L"##" || trigger == L"###" || trigger == L"-" || trigger == L"*" || trigger == L"[]" || trigger == L"1.") {
+                lastAutoFormatPrefix = trigger;
+                lastAutoFormatLine = line;
                 isLoadingEditor = true;
                 CHARRANGE removeRange{start, selection.cpMin};
                 SendMessageW(hwnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&removeRange));
@@ -958,6 +1408,8 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
                     ExecuteCommand(CmdBulletText);
                 } else if (trigger == L"[]") {
                     ExecuteCommand(CmdChecklistText);
+                } else if (trigger == L"1.") {
+                    ExecuteCommand(CmdNumberedList);
                 } else {
                     CHARFORMAT2W fmt{};
                     fmt.cbSize = sizeof(fmt);
@@ -1015,7 +1467,7 @@ void PaintDock(HWND hwnd) {
     int currentPos = gripSize + gap;
 
     // 2. The 5 Deck Tabs: WORK, PERSONAL, SCRATCHPAD, IDEAS, ARCHIVE
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 4; ++i) {
         bool isHovered = (hoveredTabIndex == i);
         bool isActive = (activeDeck == i && (appState == AppState::Peek || appState == AppState::Editing));
 
@@ -1042,7 +1494,7 @@ void PaintDock(HWND hwnd) {
         g.DrawPath(&borderPen, &path);
 
         // Deck label: uppercase bold
-        std::wstring titleText = DeckList[i].name;
+        std::wstring titleText = std::wstring(DeckList[i].symbol) + L" " + DeckList[i].name;
         Gdiplus::SolidBrush textBrush(ToGdiColor(PaperInk));
         Gdiplus::Font font(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 
@@ -1118,8 +1570,20 @@ void PaintDock(HWND hwnd) {
         g.DrawString(symbol, -1, &themeFont, r, &csf, &themeText);
     });
 
-    // Button 102: [🎛] (Dock settings / Sliders)
+    // Button 102: [📌] (Pin button - keeps dock & editor open)
     drawCircleButton(102, [&](Gdiplus::RectF r, bool) {
+        Gdiplus::Font pinFont(L"Segoe UI Symbol", static_cast<float>(Scale(hwnd, 13)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::Color textColor = config.pinned ? Gdiplus::Color(255, 167, 243, 208) : Gdiplus::Color(255, 255, 255, 255);
+        Gdiplus::SolidBrush pinText(textColor);
+        Gdiplus::StringFormat csf;
+        csf.SetAlignment(Gdiplus::StringAlignmentCenter);
+        csf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        const wchar_t* symbol = config.pinned ? L"\x2297" : L"\x2299"; // ⊗ (pinned) or ⊙ (unpinned)
+        g.DrawString(symbol, -1, &pinFont, r, &csf, &pinText);
+    });
+
+    // Button 103: [🎛] (Dock settings / Sliders)
+    drawCircleButton(103, [&](Gdiplus::RectF r, bool) {
         float cx = r.X + r.Width / 2.0f;
         float cy = r.Y + r.Height / 2.0f;
         float lineW = static_cast<float>(Scale(hwnd, 14));
@@ -1158,9 +1622,9 @@ int HitTestDock(HWND hwnd, int x, int y) {
     if (pos < gripSize) return -2; // Grip
 
     int current = gripSize + gap;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 4; ++i) {
         if (pos >= current && pos < current + pillLen) {
-            return i; // Deck tab index 0..4
+            return i; // Deck tab index 0..3
         }
         current += pillLen + gap;
     }
@@ -1173,7 +1637,10 @@ int HitTestDock(HWND hwnd, int x, int y) {
     if (pos >= current && pos < current + iconBtnSize) return 101; // Theme button
     current += iconBtnSize + iconGap;
 
-    if (pos >= current && pos < current + iconBtnSize) return 102; // Settings button
+    if (pos >= current && pos < current + iconBtnSize) return 102; // Pin button
+    current += iconBtnSize + iconGap;
+
+    if (pos >= current && pos < current + iconBtnSize) return 103; // Settings button
 
     return -1;
 }
@@ -1190,6 +1657,18 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_SETCURSOR: {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit = HitTestDock(hwnd, pt.x, pt.y);
+            if (hit == -2 || (hit >= 0 && hit < 4) || (hit >= 100 && hit <= 103)) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
 
         case WM_MOUSEMOVE: {
             int x = GET_X_LPARAM(lp);
@@ -1263,7 +1742,7 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
 
-            if (hit >= 0 && hit < 5) {
+            if (hit >= 0 && hit < 4) {
                 activeDeck = hit;
                 if (appState == AppState::Collapsed) {
                     SetAppState(AppState::Peek);
@@ -1294,6 +1773,11 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             if (hit == 102) {
+                ExecuteCommand(CmdPinEditor);
+                return 0;
+            }
+
+            if (hit == 103) {
                 ExecuteCommand(CmdDockSettings);
                 return 0;
             }
@@ -1634,21 +2118,20 @@ void PaintEditor(HWND hwnd) {
 
     int pad = Scale(hwnd, 20);
 
-    // 1. Topbar: [Back] | "EdgeNotes > Title" | [Pin] [X]
+    // 1. Topbar: [Back] | "EdgeNotes > Title" | [More ...] [Export] [Pin] [X]
     Gdiplus::Font navFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     Gdiplus::SolidBrush mutedBrush(ToGdiColor(PaperMuted));
     Gdiplus::SolidBrush inkBrush(ToGdiColor(PaperInk));
+    Gdiplus::StringFormat centerSf;
+    centerSf.SetAlignment(Gdiplus::StringAlignmentCenter);
+    centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 
     // Back to deck button (arrow / chevron)
     Gdiplus::RectF backBtnRect(static_cast<float>(pad), static_cast<float>(Scale(hwnd, 8)), static_cast<float>(Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 24)));
     Gdiplus::GraphicsPath backBtnPath;
     AddRoundedRectToPath(backBtnPath, backBtnRect, static_cast<float>(Scale(hwnd, 4)));
-    Gdiplus::SolidBrush btnBg(ToGdiColor(NightSurface, 20));
+    Gdiplus::SolidBrush btnBg(ToGdiColor(NightSurface, (hoveredToolbarBtn == CmdBackToDeck ? 45 : 20)));
     g.FillPath(&btnBg, &backBtnPath);
-
-    Gdiplus::StringFormat centerSf;
-    centerSf.SetAlignment(Gdiplus::StringAlignmentCenter);
-    centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     g.DrawString(L"\x2190", -1, &navFont, backBtnRect, &centerSf, &inkBrush);
 
     // Breadcrumb text: "● DeckName » [Title]"
@@ -1665,20 +2148,50 @@ void PaintEditor(HWND hwnd) {
     std::wstring breadcrumb = deckName + L"   \x00BB   " + Wide(n ? (n->title.empty() ? "Untitled note" : n->title) : "");
     g.DrawString(breadcrumb.c_str(), -1, &navFont, Gdiplus::PointF(dotX + dotSize + static_cast<float>(Scale(hwnd, 6)), static_cast<float>(Scale(hwnd, 13))), &mutedBrush);
 
-    // Pin & Close buttons on top right
-    Gdiplus::RectF pinRect(static_cast<float>(client.right - pad - Scale(hwnd, 52)), static_cast<float>(Scale(hwnd, 8)), static_cast<float>(Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 24)));
+    // Top right buttons: More (…), Export, Pin, Close
+    int topRBtnW = Scale(hwnd, 24);
+    int topRBtnH = Scale(hwnd, 24);
+    int topRBtnY = Scale(hwnd, 8);
+
+    // Close button
+    Gdiplus::RectF closeRect(static_cast<float>(client.right - pad - topRBtnW), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
+    Gdiplus::GraphicsPath closePath;
+    AddRoundedRectToPath(closePath, closeRect, static_cast<float>(Scale(hwnd, 4)));
+    if (hoveredToolbarBtn == CmdExitApp) {
+        Gdiplus::SolidBrush hovB(ToGdiColor(PaperInk, 35));
+        g.FillPath(&hovB, &closePath);
+    }
+    g.DrawString(L"\x2715", -1, &navFont, closeRect, &centerSf, &inkBrush);
+
+    // Pin button
+    Gdiplus::RectF pinRect(static_cast<float>(client.right - pad - topRBtnW * 2 - Scale(hwnd, 4)), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
     Gdiplus::GraphicsPath pinPath;
     AddRoundedRectToPath(pinPath, pinRect, static_cast<float>(Scale(hwnd, 4)));
-    if (config.pinned) {
-        Gdiplus::SolidBrush pinActiveBrush(ToGdiColor(PaperInk, 40));
+    if (config.pinned || hoveredToolbarBtn == CmdPinEditor) {
+        Gdiplus::SolidBrush pinActiveBrush(ToGdiColor(PaperInk, config.pinned ? 40 : 25));
         g.FillPath(&pinActiveBrush, &pinPath);
     }
     g.DrawString(config.pinned ? L"\x2297" : L"\x2299", -1, &navFont, pinRect, &centerSf, &inkBrush);
 
-    Gdiplus::RectF closeRect(static_cast<float>(client.right - pad - Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 8)), static_cast<float>(Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 24)));
-    Gdiplus::GraphicsPath closePath;
-    AddRoundedRectToPath(closePath, closeRect, static_cast<float>(Scale(hwnd, 4)));
-    g.DrawString(L"\x2715", -1, &navFont, closeRect, &centerSf, &inkBrush);
+    // Export button
+    Gdiplus::RectF exportTopRect(static_cast<float>(client.right - pad - topRBtnW * 3 - Scale(hwnd, 8)), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
+    Gdiplus::GraphicsPath exportTopPath;
+    AddRoundedRectToPath(exportTopPath, exportTopRect, static_cast<float>(Scale(hwnd, 4)));
+    if (hoveredToolbarBtn == CmdExportNote) {
+        Gdiplus::SolidBrush expHovB(ToGdiColor(PaperInk, 30));
+        g.FillPath(&expHovB, &exportTopPath);
+    }
+    g.DrawString(L"\x2913", -1, &navFont, exportTopRect, &centerSf, &inkBrush);
+
+    // More button (…)
+    Gdiplus::RectF moreRect(static_cast<float>(client.right - pad - topRBtnW * 4 - Scale(hwnd, 12)), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
+    Gdiplus::GraphicsPath morePath;
+    AddRoundedRectToPath(morePath, moreRect, static_cast<float>(Scale(hwnd, 4)));
+    if (hoveredToolbarBtn == CmdMoreMenu) {
+        Gdiplus::SolidBrush moreHovB(ToGdiColor(PaperInk, 30));
+        g.FillPath(&moreHovB, &morePath);
+    }
+    g.DrawString(L"\x2026", -1, &navFont, moreRect, &centerSf, &inkBrush);
 
     // 2. Metadata line under Title
     int metaY = Scale(hwnd, 44) + Scale(hwnd, 36) + Scale(hwnd, 2);
@@ -1697,37 +2210,50 @@ void PaintEditor(HWND hwnd) {
     Gdiplus::SolidBrush toolbarBg(ToGdiColor(PaperInk, 18));
     g.FillPath(&toolbarBg, &toolbarPath);
 
-    // Flat toolbar buttons: [B] [I] [H1] [H2] [•] [☐] | Swatches | [Archive] [Delete] [Export]
+    // Full tools array
     struct ToolBtn { int id; const wchar_t* label; };
     ToolBtn tools[] = {
         {CmdBoldText, L"B"},
         {CmdItalicText, L"I"},
+        {CmdStrikeText, L"S"},
         {CmdHeading1, L"H1"},
         {CmdHeading2, L"H2"},
+        {CmdHeading3, L"H3"},
         {CmdBulletText, L"\x2022"},
-        {CmdChecklistText, L"\x25A2"}
+        {CmdChecklistText, L"\x25A2"},
+        {CmdNumberedList, L"1."},
+        {CmdCodeBlock, L"</>"},
+        {CmdInsertLink, L"\x221E"},
+        {CmdUndoText, L"\x21B6"},
+        {CmdRedoText, L"\x21B7"}
     };
 
     int btnX = pad + Scale(hwnd, 4);
-    int btnW = Scale(hwnd, 28);
-    int btnH = Scale(hwnd, 24);
-    int btnY = toolbarY + Scale(hwnd, 4);
+    int btnW = Scale(hwnd, 24);
+    int btnH = Scale(hwnd, 22);
+    int btnY = toolbarY + Scale(hwnd, 5);
 
-    Gdiplus::Font btnFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::Font btnFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     for (const auto& tb : tools) {
         Gdiplus::RectF tr(static_cast<float>(btnX), static_cast<float>(btnY), static_cast<float>(btnW), static_cast<float>(btnH));
+        if (hoveredToolbarBtn == tb.id) {
+            Gdiplus::GraphicsPath tp;
+            AddRoundedRectToPath(tp, tr, static_cast<float>(Scale(hwnd, 3)));
+            Gdiplus::SolidBrush hovB(ToGdiColor(PaperInk, 35));
+            g.FillPath(&hovB, &tp);
+        }
         g.DrawString(tb.label, -1, &btnFont, tr, &centerSf, &inkBrush);
         btnX += btnW + Scale(hwnd, 2);
     }
 
     // Divider
-    btnX += Scale(hwnd, 4);
+    btnX += Scale(hwnd, 2);
     Gdiplus::Pen divPen(ToGdiColor(PaperInk, 30), 1.0f);
     g.DrawLine(&divPen, btnX, btnY + 2, btnX, btnY + btnH - 2);
-    btnX += Scale(hwnd, 8);
+    btnX += Scale(hwnd, 6);
 
     // 8 Pastel color swatches
-    int swatchSize = Scale(hwnd, 14);
+    int swatchSize = Scale(hwnd, 13);
     int swatchY = btnY + (btnH - swatchSize) / 2;
     for (int c = 0; c < 8; ++c) {
         Gdiplus::RectF sr(static_cast<float>(btnX), static_cast<float>(swatchY), static_cast<float>(swatchSize), static_cast<float>(swatchSize));
@@ -1736,26 +2262,45 @@ void PaintEditor(HWND hwnd) {
         if (n && (n->color % 8) == static_cast<unsigned>(c)) {
             Gdiplus::Pen selPen(ToGdiColor(PaperInk), 2.0f);
             g.DrawEllipse(&selPen, sr);
+        } else if (hoveredToolbarBtn == CmdColorBase + c) {
+            Gdiplus::Pen hovPen(ToGdiColor(PaperInk, 120), 1.5f);
+            g.DrawEllipse(&hovPen, sr);
         } else {
             Gdiplus::Pen sPen(ToGdiColor(PaperBorder), 1.0f);
             g.DrawEllipse(&sPen, sr);
         }
-        btnX += swatchSize + Scale(hwnd, 6);
+        btnX += swatchSize + Scale(hwnd, 5);
     }
 
-    // Right-aligned action buttons: Export, Archive, Delete
+    // Right-aligned action buttons: Archive, Delete
     int actionX = client.right - pad - Scale(hwnd, 4);
     ToolBtn actions[] = {
         {CmdDeleteNote, L"\x2715"},  // Delete
-        {CmdRestoreNote, L"\x25A4"}, // Archive
-        {CmdExportNote, L"\x2913"}   // Export
+        {CmdRestoreNote, L"\x25A4"}  // Archive
     };
 
     for (const auto& act : actions) {
         actionX -= btnW;
         Gdiplus::RectF ar(static_cast<float>(actionX), static_cast<float>(btnY), static_cast<float>(btnW), static_cast<float>(btnH));
+        if (hoveredToolbarBtn == act.id) {
+            Gdiplus::GraphicsPath ap;
+            AddRoundedRectToPath(ap, ar, static_cast<float>(Scale(hwnd, 3)));
+            Gdiplus::SolidBrush hovB(ToGdiColor(PaperInk, 35));
+            g.FillPath(&hovB, &ap);
+        }
         g.DrawString(act.label, -1, &btnFont, ar, &centerSf, &inkBrush);
         actionX -= Scale(hwnd, 4);
+    }
+
+    // 4. Delete Undo bar (E12)
+    if (store.deleted && GetTickCount64() < store.deleted->expires) {
+        int statusH = Scale(hwnd, 26);
+        Gdiplus::RectF delBar(static_cast<float>(pad), static_cast<float>(client.bottom - statusH - Scale(hwnd, 28)), static_cast<float>(client.right - pad * 2), static_cast<float>(Scale(hwnd, 22)));
+        Gdiplus::GraphicsPath delPath;
+        AddRoundedRectToPath(delPath, delBar, static_cast<float>(Scale(hwnd, 4)));
+        Gdiplus::SolidBrush delBg(ToGdiColor(PaperInk, (hoveredToolbarBtn == CmdUndoDelete ? 40 : 25)));
+        g.FillPath(&delBg, &delPath);
+        g.DrawString(L"Note deleted \x00B7 Click here to Undo (Ctrl+Z)", -1, &navFont, delBar, &centerSf, &inkBrush);
     }
 
     buffer.end(hdc);
@@ -1766,18 +2311,38 @@ int HitTestEditor(HWND hwnd, int x, int y) {
     RECT client;
     GetClientRect(hwnd, &client);
     int pad = Scale(hwnd, 20);
+    int topRBtnW = Scale(hwnd, 24);
+    int topRBtnH = Scale(hwnd, 24);
+    int topRBtnY = Scale(hwnd, 8);
 
     // Topbar back button
-    if (x >= pad && x <= pad + Scale(hwnd, 24) && y >= Scale(hwnd, 8) && y <= Scale(hwnd, 32)) {
+    if (x >= pad && x <= pad + Scale(hwnd, 24) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
         return CmdBackToDeck;
     }
+    // Close button
+    if (x >= client.right - pad - topRBtnW && x <= client.right - pad && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
+        return CmdExitApp; // Will collapse editor
+    }
     // Pin button
-    if (x >= client.right - pad - Scale(hwnd, 52) && x <= client.right - pad - Scale(hwnd, 28) && y >= Scale(hwnd, 8) && y <= Scale(hwnd, 32)) {
+    if (x >= client.right - pad - topRBtnW * 2 - Scale(hwnd, 4) && x <= client.right - pad - topRBtnW - Scale(hwnd, 4) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
         return CmdPinEditor;
     }
-    // Close button
-    if (x >= client.right - pad - Scale(hwnd, 24) && x <= client.right - pad && y >= Scale(hwnd, 8) && y <= Scale(hwnd, 32)) {
-        return CmdExitApp; // Will collapse editor
+    // Export button
+    if (x >= client.right - pad - topRBtnW * 3 - Scale(hwnd, 8) && x <= client.right - pad - topRBtnW * 2 - Scale(hwnd, 8) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
+        return CmdExportNote;
+    }
+    // More button (…)
+    if (x >= client.right - pad - topRBtnW * 4 - Scale(hwnd, 12) && x <= client.right - pad - topRBtnW * 3 - Scale(hwnd, 12) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
+        return CmdMoreMenu;
+    }
+
+    // Delete undo bar hit test
+    if (store.deleted && GetTickCount64() < store.deleted->expires) {
+        int statusH = Scale(hwnd, 26);
+        int barY = client.bottom - statusH - Scale(hwnd, 28);
+        if (x >= pad && x <= client.right - pad && y >= barY && y <= barY + Scale(hwnd, 22)) {
+            return CmdUndoDelete;
+        }
     }
 
     // Toolbar hit testing
@@ -1787,29 +2352,34 @@ int HitTestEditor(HWND hwnd, int x, int y) {
 
     if (y >= toolbarY && y <= toolbarY + toolbarH) {
         int btnX = pad + Scale(hwnd, 4);
-        int btnW = Scale(hwnd, 28);
-        int btnH = Scale(hwnd, 24);
-        int btnY = toolbarY + Scale(hwnd, 4);
+        int btnW = Scale(hwnd, 24);
+        int btnH = Scale(hwnd, 22);
+        int btnY = toolbarY + Scale(hwnd, 5);
 
-        int tools[] = {CmdBoldText, CmdItalicText, CmdHeading1, CmdHeading2, CmdBulletText, CmdChecklistText};
+        int tools[] = {
+            CmdBoldText, CmdItalicText, CmdStrikeText,
+            CmdHeading1, CmdHeading2, CmdHeading3,
+            CmdBulletText, CmdChecklistText, CmdNumberedList,
+            CmdCodeBlock, CmdInsertLink, CmdUndoText, CmdRedoText
+        };
         for (int cmd : tools) {
             if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) return cmd;
             btnX += btnW + Scale(hwnd, 2);
         }
 
         // Color swatches
-        btnX += Scale(hwnd, 12);
-        int swatchSize = Scale(hwnd, 14);
+        btnX += Scale(hwnd, 8);
+        int swatchSize = Scale(hwnd, 13);
         for (int c = 0; c < 8; ++c) {
             if (x >= btnX - 2 && x <= btnX + swatchSize + 2) {
                 return CmdColorBase + c;
             }
-            btnX += swatchSize + Scale(hwnd, 6);
+            btnX += swatchSize + Scale(hwnd, 5);
         }
 
         // Right actions
         int actionX = client.right - pad - Scale(hwnd, 4);
-        int actions[] = {CmdDeleteNote, CmdRestoreNote, CmdExportNote};
+        int actions[] = {CmdDeleteNote, CmdRestoreNote};
         for (int act : actions) {
             actionX -= btnW;
             if (x >= actionX && x <= actionX + btnW && y >= btnY && y <= btnY + btnH) return act;
@@ -1863,6 +2433,39 @@ LRESULT CALLBACK EditorWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_SETCURSOR: {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit = HitTestEditor(hwnd, pt.x, pt.y);
+            if (hit != 0) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
+
+        case WM_MOUSEMOVE: {
+            int x = GET_X_LPARAM(lp);
+            int y = GET_Y_LPARAM(lp);
+            int hit = HitTestEditor(hwnd, x, y);
+            if (hit != hoveredToolbarBtn) {
+                hoveredToolbarBtn = hit;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&tme);
+            return 0;
+        }
+
+        case WM_MOUSELEAVE: {
+            if (hoveredToolbarBtn != 0) {
+                hoveredToolbarBtn = 0;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
 
         case WM_CTLCOLOREDIT:
         case WM_CTLCOLORSTATIC: {
@@ -1925,12 +2528,36 @@ void RefreshManagerList() {
     for (const auto& n : store.notes) {
         if (managerFilter == CmdFilterDeck && n.archived) continue;
         if (managerFilter == CmdFilterArchive && !n.archived) continue;
+        if (managerFilter == CmdFilterTasks && (n.archived || n.color == 1 || n.color == 4)) continue;
+        if (managerFilter == CmdFilterNotes && (n.archived || n.color != 1)) continue;
+        if (managerFilter == CmdFilterThoughts && (n.archived || n.color != 4)) continue;
 
         auto haystack = Wide(n.title + " " + n.body);
         std::transform(haystack.begin(), haystack.end(), haystack.begin(), [](wchar_t c) { return std::towlower(c); });
         if (!query.empty() && haystack.find(query) == std::wstring::npos) continue;
 
         managerRows.push_back(n.id);
+    }
+
+    if (managerSortMode == 0) {
+        // Recently edited (ID desc)
+        std::sort(managerRows.begin(), managerRows.end(), [](std::uint64_t a, std::uint64_t b) {
+            return a > b;
+        });
+    } else if (managerSortMode == 1) {
+        // Title A-Z
+        std::sort(managerRows.begin(), managerRows.end(), [](std::uint64_t a, std::uint64_t b) {
+            auto* na = GetNoteById(a);
+            auto* nb = GetNoteById(b);
+            std::string ta = na ? na->title : "";
+            std::string tb = nb ? nb->title : "";
+            return _stricmp(ta.c_str(), tb.c_str()) < 0;
+        });
+    } else if (managerSortMode == 2) {
+        // My order (ID asc)
+        std::sort(managerRows.begin(), managerRows.end(), [](std::uint64_t a, std::uint64_t b) {
+            return a < b;
+        });
     }
 
     if (!managerRows.empty()) {
@@ -1981,15 +2608,15 @@ void PaintManager(HWND hwnd) {
 
     // 2. Three-column layout
     int col1W = Scale(hwnd, 180); // Nav
-    int col2W = Scale(hwnd, 310); // List
+    int col2W = Scale(hwnd, 320); // List
     int col3W = client.right - col1W - col2W; // Preview
 
     int bodyY = topH + 1;
     int bodyH = client.bottom - bodyY;
 
     // Col 1: Navigation Filters
-    int navY = bodyY + Scale(hwnd, 16);
-    int btnH = Scale(hwnd, 32);
+    int navY = bodyY + Scale(hwnd, 14);
+    int btnH = Scale(hwnd, 30);
 
     // [+ New note] mint button
     Gdiplus::RectF newBtn(static_cast<float>(pad), static_cast<float>(navY), static_cast<float>(col1W - pad * 2), static_cast<float>(btnH));
@@ -2003,40 +2630,59 @@ void PaintManager(HWND hwnd) {
     centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
     g.DrawString(L"+ New note", -1, &newBtnFont, newBtn, &centerSf, &darkText);
 
-    navY += btnH + Scale(hwnd, 16);
+    navY += btnH + Scale(hwnd, 12);
 
-    // Filters: All notes, On the deck, Archive
-    struct NavItem { int id; const wchar_t* label; std::size_t count; };
-    std::size_t deckCount = 0, archCount = 0;
+    // Counts
+    std::size_t deckCount = 0, archCount = 0, tasksCount = 0, notesCount = 0, thoughtsCount = 0;
     for (const auto& n : store.notes) {
-        if (n.archived) archCount++; else deckCount++;
+        if (n.archived) {
+            archCount++;
+        } else {
+            deckCount++;
+            if (n.color == 1) notesCount++;
+            else if (n.color == 4) thoughtsCount++;
+            else tasksCount++;
+        }
     }
+
+    struct NavItem { int id; const wchar_t* label; std::size_t count; bool isSub; };
     NavItem navs[] = {
-        {CmdFilterAll, L"All notes", store.notes.size()},
-        {CmdFilterDeck, L"On the deck", deckCount},
-        {CmdFilterArchive, L"Archive", archCount}
+        {CmdFilterAll, L"All notes", store.notes.size(), false},
+        {CmdFilterDeck, L"On the deck", deckCount, false},
+        {CmdFilterTasks, L"\x2611  Tasks", tasksCount, true},
+        {CmdFilterNotes, L"\x2630  Notes", notesCount, true},
+        {CmdFilterThoughts, L"\x2726  Thoughts", thoughtsCount, true},
+        {CmdFilterArchive, L"Archive", archCount, false}
     };
 
     Gdiplus::Font navItemFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    Gdiplus::Font navSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+
     for (const auto& item : navs) {
         bool selected = (managerFilter == item.id);
-        Gdiplus::RectF nr(static_cast<float>(pad), static_cast<float>(navY), static_cast<float>(col1W - pad * 2), static_cast<float>(btnH));
+        int itemIndent = item.isSub ? Scale(hwnd, 12) : 0;
+        int rowH = item.isSub ? Scale(hwnd, 24) : Scale(hwnd, 28);
+        Gdiplus::RectF nr(static_cast<float>(pad + itemIndent), static_cast<float>(navY), static_cast<float>(col1W - pad * 2 - itemIndent), static_cast<float>(rowH));
         if (selected) {
             Gdiplus::GraphicsPath selPath;
-            AddRoundedRectToPath(selPath, nr, static_cast<float>(Scale(hwnd, 5)));
+            AddRoundedRectToPath(selPath, nr, static_cast<float>(Scale(hwnd, 4)));
             Gdiplus::SolidBrush selBg(ToGdiColor(NightSelected));
             g.FillPath(&selBg, &selPath);
         }
-        g.DrawString(item.label, -1, &navItemFont, Gdiplus::PointF(nr.X + Scale(hwnd, 8), nr.Y + Scale(hwnd, 7)), selected ? &inkBrush : &mutedBrush);
+        g.DrawString(item.label, -1, item.isSub ? &navSubFont : &navItemFont, Gdiplus::PointF(nr.X + Scale(hwnd, 6), nr.Y + (item.isSub ? 3 : 5)), selected ? &inkBrush : &mutedBrush);
 
         std::wstring countStr = std::to_wstring(item.count);
         Gdiplus::StringFormat rightSf;
         rightSf.SetAlignment(Gdiplus::StringAlignmentFar);
         rightSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-        g.DrawString(countStr.c_str(), -1, &subFont, Gdiplus::RectF(nr.X, nr.Y, nr.Width - Scale(hwnd, 8), nr.Height), &rightSf, &mutedBrush);
+        g.DrawString(countStr.c_str(), -1, &subFont, Gdiplus::RectF(nr.X, nr.Y, nr.Width - Scale(hwnd, 6), nr.Height), &rightSf, &mutedBrush);
 
-        navY += btnH + Scale(hwnd, 4);
+        navY += rowH + Scale(hwnd, 2);
     }
+
+    // M7: "Saved on this device" at bottom of Col 1
+    Gdiplus::Font savedFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    g.DrawString(L"\x2713 Saved on this device", -1, &savedFont, Gdiplus::PointF(static_cast<float>(pad), static_cast<float>(client.bottom - Scale(hwnd, 26))), &mutedBrush);
 
     // Col 1 border
     g.DrawLine(&borderPen, col1W, bodyY, col1W, client.bottom);
@@ -2048,11 +2694,36 @@ void PaintManager(HWND hwnd) {
 
     // Header of Col 2
     int listHeadY = bodyY + Scale(hwnd, 12);
-    const wchar_t* listTitle = (managerFilter == CmdFilterAll) ? L"All notes" : (managerFilter == CmdFilterDeck ? L"On the deck" : L"Archive");
+    const wchar_t* listTitle = L"All notes";
+    if (managerFilter == CmdFilterDeck) listTitle = L"On the deck";
+    else if (managerFilter == CmdFilterTasks) listTitle = L"Tasks";
+    else if (managerFilter == CmdFilterNotes) listTitle = L"Notes";
+    else if (managerFilter == CmdFilterThoughts) listTitle = L"Thoughts";
+    else if (managerFilter == CmdFilterArchive) listTitle = L"Archive";
     g.DrawString(listTitle, -1, &logoFont, Gdiplus::PointF(static_cast<float>(col2X + pad), static_cast<float>(listHeadY)), &inkBrush);
 
-    std::wstring totalVisible = std::to_wstring(managerRows.size()) + L" notes";
-    g.DrawString(totalVisible.c_str(), -1, &subFont, Gdiplus::PointF(static_cast<float>(col2X + col2W - pad - Scale(hwnd, 50)), static_cast<float>(listHeadY + 2)), &mutedBrush);
+    // Header action buttons: [Import] [Backup] [Sort ▾]
+    int actBtnH = Scale(hwnd, 20);
+    int rightX = col2X + col2W - pad;
+
+    // Export Backup button (M5)
+    int backupW = Scale(hwnd, 24);
+    rightX -= backupW;
+    Gdiplus::RectF backupRect(static_cast<float>(rightX), static_cast<float>(listHeadY), static_cast<float>(backupW), static_cast<float>(actBtnH));
+    g.DrawString(L"\x2913", -1, &navItemFont, backupRect, &centerSf, &mutedBrush);
+
+    // Import button (M4)
+    int importW = Scale(hwnd, 24);
+    rightX -= (importW + Scale(hwnd, 4));
+    Gdiplus::RectF importRect(static_cast<float>(rightX), static_cast<float>(listHeadY), static_cast<float>(importW), static_cast<float>(actBtnH));
+    g.DrawString(L"\x2912", -1, &navItemFont, importRect, &centerSf, &mutedBrush);
+
+    // Sort dropdown button (M2)
+    const wchar_t* sortLabel = (managerSortMode == 0) ? L"Recent \x25BE" : (managerSortMode == 1 ? L"A-Z \x25BE" : L"Order \x25BE");
+    int sortW = Scale(hwnd, 58);
+    rightX -= (sortW + Scale(hwnd, 6));
+    Gdiplus::RectF sortRect(static_cast<float>(rightX), static_cast<float>(listHeadY), static_cast<float>(sortW), static_cast<float>(actBtnH));
+    g.DrawString(sortLabel, -1, &subFont, sortRect, &centerSf, &mutedBrush);
 
     // Notes list items
     int itemY = bodyY + Scale(hwnd, 72);
@@ -2096,9 +2767,12 @@ void PaintManager(HWND hwnd) {
         g.DrawString(itemTitle.c_str(), -1, &rowTitleFont, Gdiplus::PointF(ir.X + Scale(hwnd, 16), ir.Y + Scale(hwnd, 10)), &inkBrush);
 
         // Snippet
-        std::wstring snippet = Wide(n->body.substr(0, 50));
+        std::wstring snippet = Wide(n->body.substr(0, 45));
         Gdiplus::Font rowSnippetFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
         g.DrawString(snippet.c_str(), -1, &rowSnippetFont, Gdiplus::PointF(ir.X + Scale(hwnd, 16), ir.Y + Scale(hwnd, 32)), &mutedBrush);
+
+        // M6: Date on rows
+        g.DrawString(L"Oct 18", -1, &subFont, Gdiplus::PointF(ir.X + ir.Width - Scale(hwnd, 48), ir.Y + Scale(hwnd, 10)), &mutedBrush);
 
         itemY += itemH + Scale(hwnd, 4);
     }
@@ -2165,28 +2839,47 @@ int HitTestManager(HWND hwnd, int x, int y) {
     int bodyH = client.bottom - bodyY;
 
     int col1W = Scale(hwnd, 180);
-    int col2W = Scale(hwnd, 310);
+    int col2W = Scale(hwnd, 320);
     int col3W = client.right - col1W - col2W;
 
     // Col 1 hit tests
     if (x >= pad && x <= col1W - pad) {
-        int navY = bodyY + Scale(hwnd, 16);
-        int btnH = Scale(hwnd, 32);
+        int navY = bodyY + Scale(hwnd, 14);
+        int btnH = Scale(hwnd, 30);
 
         // [+ New note]
         if (y >= navY && y <= navY + btnH) return CmdNewNote;
-        navY += btnH + Scale(hwnd, 16);
+        navY += btnH + Scale(hwnd, 12);
 
-        // Filter buttons
-        if (y >= navY && y <= navY + btnH) return CmdFilterAll;
-        navY += btnH + Scale(hwnd, 4);
-        if (y >= navY && y <= navY + btnH) return CmdFilterDeck;
-        navY += btnH + Scale(hwnd, 4);
-        if (y >= navY && y <= navY + btnH) return CmdFilterArchive;
+        // Nav filter items
+        int filterIds[] = {CmdFilterAll, CmdFilterDeck, CmdFilterTasks, CmdFilterNotes, CmdFilterThoughts, CmdFilterArchive};
+        bool isSubs[] = {false, false, true, true, true, false};
+        for (int i = 0; i < 6; ++i) {
+            int rowH = isSubs[i] ? Scale(hwnd, 24) : Scale(hwnd, 28);
+            if (y >= navY && y <= navY + rowH) return filterIds[i];
+            navY += rowH + Scale(hwnd, 2);
+        }
     }
 
-    // Col 2 hit tests (Notes List)
+    // Col 2 hit tests (Header buttons & Notes List)
     if (x >= col1W && x <= col1W + col2W) {
+        int listHeadY = bodyY + Scale(hwnd, 12);
+        int actBtnH = Scale(hwnd, 20);
+        if (y >= listHeadY && y <= listHeadY + actBtnH) {
+            int rightX = col1W + col2W - pad;
+            int backupW = Scale(hwnd, 24);
+            rightX -= backupW;
+            if (x >= rightX && x <= rightX + backupW) return CmdExportBackupJson;
+
+            int importW = Scale(hwnd, 24);
+            rightX -= (importW + Scale(hwnd, 4));
+            if (x >= rightX && x <= rightX + importW) return CmdImportNotes;
+
+            int sortW = Scale(hwnd, 58);
+            rightX -= (sortW + Scale(hwnd, 6));
+            if (x >= rightX && x <= rightX + sortW) return CmdSortOrder;
+        }
+
         int itemY = bodyY + Scale(hwnd, 72);
         int itemH = Scale(hwnd, 64);
         for (std::size_t i = 0; i < managerRows.size(); ++i) {
@@ -2220,7 +2913,7 @@ LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CREATE: {
             int col1W = Scale(hwnd, 180);
-            int col2W = Scale(hwnd, 310);
+            int col2W = Scale(hwnd, 320);
             int pad = Scale(hwnd, 12);
             int sbY = Scale(hwnd, 50) + Scale(hwnd, 38);
             int sbH = Scale(hwnd, 26);
@@ -2237,7 +2930,7 @@ LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_SIZE: {
             int col1W = Scale(hwnd, 180);
-            int col2W = Scale(hwnd, 310);
+            int col2W = Scale(hwnd, 320);
             int pad = Scale(hwnd, 12);
             int sbY = Scale(hwnd, 50) + Scale(hwnd, 38);
             int sbH = Scale(hwnd, 26);
@@ -2254,6 +2947,18 @@ LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
         case WM_ERASEBKGND:
             return 1;
+
+        case WM_SETCURSOR: {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(hwnd, &pt);
+            int hit = HitTestManager(hwnd, pt.x, pt.y);
+            if (hit != 0) {
+                SetCursor(LoadCursorW(nullptr, IDC_HAND));
+                return TRUE;
+            }
+            return DefWindowProcW(hwnd, msg, wp, lp);
+        }
 
         case WM_CTLCOLOREDIT:
         case WM_CTLCOLORSTATIC: {
@@ -2296,9 +3001,29 @@ LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ExecuteCommand(CmdNewNote);
                 return 0;
             }
-            if (hit == CmdFilterAll || hit == CmdFilterDeck || hit == CmdFilterArchive) {
+            if (hit == CmdFilterAll || hit == CmdFilterDeck || hit == CmdFilterTasks || hit == CmdFilterNotes || hit == CmdFilterThoughts || hit == CmdFilterArchive) {
                 managerFilter = hit;
                 RefreshManagerList();
+                return 0;
+            }
+            if (hit == CmdImportNotes) {
+                ImportNotesFromFile();
+                return 0;
+            }
+            if (hit == CmdExportBackupJson) {
+                ExportBackupJson();
+                return 0;
+            }
+            if (hit == CmdSortOrder) {
+                HMENU sm = CreatePopupMenu();
+                AppendMenuW(sm, MF_STRING | (managerSortMode == 0 ? MF_CHECKED : 0), CmdSortRecentlyEdited, L"Recently edited");
+                AppendMenuW(sm, MF_STRING | (managerSortMode == 1 ? MF_CHECKED : 0), CmdSortTitle, L"Title A\x2013Z");
+                AppendMenuW(sm, MF_STRING | (managerSortMode == 2 ? MF_CHECKED : 0), CmdSortOrder, L"My order");
+                POINT pt;
+                GetCursorPos(&pt);
+                int choice = TrackPopupMenu(sm, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, nullptr);
+                DestroyMenu(sm);
+                if (choice) ExecuteCommand(choice);
                 return 0;
             }
             if (hit >= 1000 && hit < 2000) {
@@ -2403,11 +3128,16 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     monoFont = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Consolas");
 
     // 5. App Data Paths & Storage
-    PWSTR localFolder = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localFolder))) return 1;
-    std::wstring baseDir = std::wstring(localFolder) + L"\\EdgeNotes";
-    CoTaskMemFree(localFolder);
-    CreateDirectoryW(baseDir.c_str(), nullptr);
+    std::wstring baseDir;
+    if (CheckIsPortableMode()) {
+        baseDir = GetExeDir();
+    } else {
+        PWSTR localFolder = nullptr;
+        if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &localFolder))) return 1;
+        baseDir = std::wstring(localFolder) + L"\\EdgeNotes";
+        CoTaskMemFree(localFolder);
+        CreateDirectoryW(baseDir.c_str(), nullptr);
+    }
     storagePath = baseDir + L"\\notes.enotes";
     configPath = baseDir + L"\\config.ini";
 
@@ -2487,6 +3217,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     if (!dockHwnd || !peekHwnd || !editorHwnd || !managerHwnd) return 2;
 
+    ApplyDwmDarkAndCorners(peekHwnd, false);
     ApplyDwmDarkAndCorners(editorHwnd, false);
     ApplyDwmDarkAndCorners(managerHwnd, true);
 
