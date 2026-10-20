@@ -32,8 +32,11 @@ try {
   & cl.exe /nologo /std:c++17 /EHsc /O2 /MT /W4 /DUNICODE /D_UNICODE main.cpp /Febuild\EdgeNotes.exe /Fobuild\main.obj build\edgenotes.res /link /SUBSYSTEM:WINDOWS user32.lib gdi32.lib shell32.lib ole32.lib comctl32.lib comdlg32.lib uuid.lib gdiplus.lib dwmapi.lib uxtheme.lib msimg32.lib advapi32.lib
   if ($LASTEXITCODE -ne 0) { throw 'Native app compilation failed' }
 
+  Copy-Item excalifont-regular.ttf build\excalifont-regular.ttf -Force -ErrorAction SilentlyContinue
+
   $releaseDir = Join-Path $PSScriptRoot "..\..\release"
   if (Test-Path $releaseDir) {
     Copy-Item build\EdgeNotes.exe (Join-Path $releaseDir "EdgeNotes-windows-x64.exe") -Force
+    Copy-Item excalifont-regular.ttf (Join-Path $releaseDir "excalifont-regular.ttf") -Force -ErrorAction SilentlyContinue
   }
 } finally { Pop-Location }

@@ -91,6 +91,29 @@ enum {
     CmdFilterTasks,
     CmdFilterNotes,
     CmdFilterThoughts,
+    CmdNavNotes = 300,
+    CmdNavDeck,
+    CmdNavArchive,
+    CmdNavSettings,
+    CmdNavAbout,
+    CmdNavSignIn,
+    CmdTrialEnterKey,
+    CmdTrialBuy,
+    CmdPopoutNote,
+    CmdMarkComplete,
+    CmdCloseEditor,
+    CmdThemeAuto,
+    CmdThemeLight,
+    CmdThemeDark,
+    CmdFontHandwritten,
+    CmdFontNormal,
+    CmdFontRounded,
+    CmdFontTypewriter,
+    CmdEdgeLeft,
+    CmdEdgeRight,
+    CmdToggleFullscreenHide,
+    CmdToggleStartWithWindows,
+    CmdMinimiseEditor,
     CmdColorBase = 200  // 200..207 for 8 paper colors
 };
 
@@ -165,6 +188,11 @@ std::wstring configPath;
 
 // Manager state
 int managerFilter = CmdFilterAll;
+int managerNavSection = 0; // 0: Notes (All / Deck / Archive), 1: Settings, 2: About
+int appearanceTheme = 0; // 0: Auto, 1: Light, 2: Dark
+int noteFontChoice = 0; // 0: Handwritten, 1: Normal, 2: Rounded, 3: Typewriter
+bool hideOverFullscreen = true;
+bool startWithWindows = false;
 std::vector<std::uint64_t> managerRows;
 std::uint64_t managerSelectedId = 0;
 
@@ -1313,6 +1341,102 @@ void ExecuteCommand(int id) {
             PostQuitMessage(0);
             break;
         }
+        case CmdPopoutNote: {
+            if (managerSelectedId != 0) {
+                activeId = managerSelectedId;
+                ShowWindow(managerHwnd, SW_HIDE);
+                SetAppState(AppState::Editing);
+            }
+            break;
+        }
+        case CmdMarkComplete: {
+            auto* targetNote = (appState == AppState::Editing) ? GetActiveNote() : GetNoteById(managerSelectedId);
+            if (targetNote) {
+                targetNote->archived = !targetNote->archived;
+                PersistStore();
+                UpdateDockGeometry();
+                RefreshManagerList();
+                if (editorHwnd && IsWindowVisible(editorHwnd)) InvalidateRect(editorHwnd, nullptr, TRUE);
+                if (managerHwnd && IsWindowVisible(managerHwnd)) InvalidateRect(managerHwnd, nullptr, TRUE);
+            }
+            break;
+        }
+        case CmdCloseEditor:
+        case CmdMinimiseEditor: {
+            SetAppState(AppState::Collapsed);
+            break;
+        }
+        case CmdNavSettings: {
+            managerNavSection = 1;
+            if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_HIDE);
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        }
+        case CmdNavNotes: {
+            managerNavSection = 0;
+            managerFilter = CmdFilterAll;
+            RefreshManagerList();
+            if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_SHOW);
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        }
+        case CmdNavDeck: {
+            managerNavSection = 0;
+            managerFilter = CmdFilterDeck;
+            RefreshManagerList();
+            if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_SHOW);
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        }
+        case CmdNavArchive: {
+            managerNavSection = 0;
+            managerFilter = CmdFilterArchive;
+            RefreshManagerList();
+            if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_SHOW);
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        }
+        case CmdNavAbout: {
+            MessageBoxW(managerHwnd, L"Peeky Notes v1.1.1\n\nInstant desktop notes on your screen edge.\nEngineered with Win32 C++ high performance.\n\nAll notes saved locally on this PC.", L"About Peeky Notes", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+        case CmdNavSignIn:
+        case CmdTrialEnterKey: {
+            MessageBoxW(managerHwnd, L"Free Trial: 6 days remaining.\n\nEverything is currently unlocked. Enter your product key anytime to link your license.", L"Peeky Notes License", MB_OK | MB_ICONINFORMATION);
+            break;
+        }
+        case CmdTrialBuy: {
+            ShellExecuteW(nullptr, L"open", L"https://peekynotes.com/buy", nullptr, nullptr, SW_SHOWNORMAL);
+            break;
+        }
+        case CmdThemeAuto: appearanceTheme = 0; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdThemeLight: appearanceTheme = 1; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdThemeDark: appearanceTheme = 2; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdFontHandwritten: noteFontChoice = 0; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdFontNormal: noteFontChoice = 1; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdFontRounded: noteFontChoice = 2; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdFontTypewriter: noteFontChoice = 3; if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE); break;
+        case CmdEdgeLeft:
+            config.side = DockSide::Left;
+            config.save(configPath);
+            UpdateDockGeometry();
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        case CmdEdgeRight:
+            config.side = DockSide::Right;
+            config.save(configPath);
+            UpdateDockGeometry();
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        case CmdToggleFullscreenHide:
+            hideOverFullscreen = !hideOverFullscreen;
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
+        case CmdToggleStartWithWindows:
+            startWithWindows = !startWithWindows;
+            ToggleStartWithWindows();
+            if (managerHwnd) InvalidateRect(managerHwnd, nullptr, TRUE);
+            break;
         default: {
             if (id >= CmdColorBase && id < CmdColorBase + 8) {
                 int c = id - CmdColorBase;
@@ -1735,8 +1859,8 @@ void PaintDock(HWND hwnd) {
 
     currentPos += Scale(hwnd, 10);
 
-    // 3. Three circular icon buttons below tabs: [+] [☀/🌙] [🎛]
-    auto drawCircleButton = [&](int btnIndex, auto drawIcon) {
+    // 3. Circular icon buttons below tabs: [+] [☀/🌙] [🎛]
+    auto drawCircleButton = [&](int btnIndex, bool isWhiteBtn, auto drawIcon) {
         bool isHovered = (hoveredTabIndex == btnIndex);
         Gdiplus::RectF btnRect;
         if (isVertical) {
@@ -1750,21 +1874,29 @@ void PaintDock(HWND hwnd) {
         Gdiplus::GraphicsPath btnPath;
         btnPath.AddEllipse(btnRect);
 
-        Gdiplus::Color bgColor = isHovered ? Gdiplus::Color(255, 45, 48, 58) : Gdiplus::Color(255, 24, 26, 32);
+        Gdiplus::Color bgColor;
+        Gdiplus::Color borderColor;
+        if (isWhiteBtn) {
+            bgColor = isHovered ? Gdiplus::Color(255, 235, 235, 240) : Gdiplus::Color(255, 255, 255, 255);
+            borderColor = Gdiplus::Color(80, 0, 0, 0);
+        } else {
+            bgColor = isHovered ? Gdiplus::Color(255, 45, 48, 58) : Gdiplus::Color(255, 24, 26, 32);
+            borderColor = Gdiplus::Color(60, 255, 255, 255);
+        }
         Gdiplus::SolidBrush bgBrush(bgColor);
         g.FillPath(&bgBrush, &btnPath);
 
-        Gdiplus::Pen borderPen(Gdiplus::Color(60, 255, 255, 255), 1.0f);
+        Gdiplus::Pen borderPen(borderColor, 1.0f);
         g.DrawPath(&borderPen, &btnPath);
 
         drawIcon(btnRect, isHovered);
         currentPos += iconBtnSize + iconGap;
     };
 
-    // Button 100: [+] (New note)
-    drawCircleButton(100, [&](Gdiplus::RectF r, bool) {
-        Gdiplus::Font plusFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 18)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush plusText(Gdiplus::Color(255, 255, 255, 255));
+    // Button 100: [+] (New note - white circular button matching Screenshot 3)
+    drawCircleButton(100, true, [&](Gdiplus::RectF r, bool) {
+        Gdiplus::Font plusFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 17)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::SolidBrush plusText(Gdiplus::Color(255, 20, 22, 28));
         Gdiplus::StringFormat csf;
         csf.SetAlignment(Gdiplus::StringAlignmentCenter);
         csf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
@@ -1772,7 +1904,7 @@ void PaintDock(HWND hwnd) {
     });
 
     // Button 101: [☀ / 🌙] (Theme toggle)
-    drawCircleButton(101, [&](Gdiplus::RectF r, bool) {
+    drawCircleButton(101, false, [&](Gdiplus::RectF r, bool) {
         Gdiplus::Font themeFont(L"Segoe UI Symbol", static_cast<float>(Scale(hwnd, 13)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
         Gdiplus::SolidBrush themeText(Gdiplus::Color(255, 255, 255, 255));
         Gdiplus::StringFormat csf;
@@ -1783,7 +1915,7 @@ void PaintDock(HWND hwnd) {
     });
 
     // Button 102: [📌] (Pin button - keeps dock & editor open)
-    drawCircleButton(102, [&](Gdiplus::RectF r, bool) {
+    drawCircleButton(102, false, [&](Gdiplus::RectF r, bool) {
         Gdiplus::Font pinFont(L"Segoe UI Symbol", static_cast<float>(Scale(hwnd, 13)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
         Gdiplus::Color textColor = config.pinned ? Gdiplus::Color(255, 167, 243, 208) : Gdiplus::Color(255, 255, 255, 255);
         Gdiplus::SolidBrush pinText(textColor);
@@ -1795,7 +1927,7 @@ void PaintDock(HWND hwnd) {
     });
 
     // Button 103: [🎛] (Dock settings / Sliders)
-    drawCircleButton(103, [&](Gdiplus::RectF r, bool) {
+    drawCircleButton(103, false, [&](Gdiplus::RectF r, bool) {
         float cx = r.X + r.Width / 2.0f;
         float cy = r.Y + r.Height / 2.0f;
         float lineW = static_cast<float>(Scale(hwnd, 14));
@@ -2138,9 +2270,9 @@ void PaintPeek(HWND hwnd) {
             Gdiplus::SolidBrush arrowBrush(ToGdiColor(PaperMuted));
             g.DrawString(L"\x2197", -1, &arrowFont, Gdiplus::PointF(cardRect.X + cardRect.Width - Scale(hwnd, 20), cardRect.Y + Scale(hwnd, 8)), &arrowBrush);
 
-            // Note snippet in Segoe Print handwriting
+            // Note snippet in Excalifont handwriting
             std::wstring bodySnippet = Wide(n->body.substr(0, 140));
-            Gdiplus::Font bodyFont(L"Segoe Print", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::Font bodyFont(L"Excalifont", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
             Gdiplus::RectF snippetRect(cardRect.X + Scale(hwnd, 12), cardRect.Y + Scale(hwnd, 28), cardRect.Width - Scale(hwnd, 24), cardRect.Height - Scale(hwnd, 32));
             Gdiplus::StringFormat snippetSf;
             snippetSf.SetTrimming(Gdiplus::StringTrimmingEllipsisWord);
@@ -2310,27 +2442,23 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // 3. EDITOR WINDOW PAINT & LOGIC
 // ---------------------------------------------------------------------------
 void LayoutEditorControls(HWND hwnd) {
-    if (!titleBoxHwnd || !richEditHwnd || !statusBoxHwnd) return;
+    if (!titleBoxHwnd || !richEditHwnd) return;
+    if (statusBoxHwnd) ShowWindow(statusBoxHwnd, SW_HIDE);
     RECT client;
     GetClientRect(hwnd, &client);
 
     int pad = Scale(hwnd, 20);
-    int topH = Scale(hwnd, 40);
-    int titleH = Scale(hwnd, 36);
-    int metaH = Scale(hwnd, 20);
-    int toolbarH = Scale(hwnd, 34);
-    int statusH = Scale(hwnd, 26);
+    int topY = Scale(hwnd, 14);
+    int titleH = Scale(hwnd, 32);
+    int titleW = client.right - pad - Scale(hwnd, 180);
 
-    int titleY = topH + Scale(hwnd, 4);
-    int metaY = titleY + titleH + Scale(hwnd, 2);
-    int toolbarY = metaY + metaH + Scale(hwnd, 6);
-    int richY = toolbarY + toolbarH + Scale(hwnd, 8);
-    int richH = client.bottom - richY - statusH - Scale(hwnd, 10);
+    int richY = topY + titleH + Scale(hwnd, 8);
+    int toolbarH = Scale(hwnd, 72);
+    int richH = client.bottom - richY - toolbarH - Scale(hwnd, 6);
     richH = std::max(Scale(hwnd, 50), richH);
 
-    MoveWindow(titleBoxHwnd, pad, titleY, client.right - pad * 2, titleH, TRUE);
+    MoveWindow(titleBoxHwnd, pad, topY, titleW, titleH, TRUE);
     MoveWindow(richEditHwnd, pad, richY, client.right - pad * 2, richH, TRUE);
-    MoveWindow(statusBoxHwnd, pad, client.bottom - statusH - Scale(hwnd, 4), client.right - pad * 2, statusH, TRUE);
 }
 
 void PaintEditor(HWND hwnd) {
@@ -2347,197 +2475,162 @@ void PaintEditor(HWND hwnd) {
 
     auto* n = GetActiveNote();
     COLORREF paperColor = n ? PaperColors[n->color % 8] : PaperColors[0];
+    COLORREF inkColor = n ? PaperInks[n->color % 8] : PaperInk;
 
-    // Entire sheet background in pastel paper color
+    // Fill entire sheet in pastel paper color
     Gdiplus::SolidBrush bgBrush(ToGdiColor(paperColor));
     g.FillRectangle(&bgBrush, 0, 0, client.right, client.bottom);
 
     int pad = Scale(hwnd, 20);
-
-    // 1. Topbar: [Back] | "EdgeNotes > Title" | [More ...] [Export] [Pin] [X]
-    Gdiplus::Font navFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush mutedBrush(ToGdiColor(PaperMuted));
-    Gdiplus::SolidBrush inkBrush(ToGdiColor(PaperInk));
+    Gdiplus::SolidBrush inkBrush(ToGdiColor(inkColor));
+    Gdiplus::SolidBrush mutedBrush(ToGdiColor(inkColor, 150));
     Gdiplus::StringFormat centerSf;
     centerSf.SetAlignment(Gdiplus::StringAlignmentCenter);
     centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 
-    // Back to deck button (arrow / chevron)
-    Gdiplus::RectF backBtnRect(static_cast<float>(pad), static_cast<float>(Scale(hwnd, 8)), static_cast<float>(Scale(hwnd, 24)), static_cast<float>(Scale(hwnd, 24)));
-    Gdiplus::GraphicsPath backBtnPath;
-    AddRoundedRectToPath(backBtnPath, backBtnRect, static_cast<float>(Scale(hwnd, 4)));
-    Gdiplus::SolidBrush btnBg(ToGdiColor(NightSurface, (hoveredToolbarBtn == CmdBackToDeck ? 45 : 20)));
-    g.FillPath(&btnBg, &backBtnPath);
-    g.DrawString(L"\x2190", -1, &navFont, backBtnRect, &centerSf, &inkBrush);
+    // 1. Header: Top right Saved · 20m, Minimize (—), Close (✕)
+    int btnSize = Scale(hwnd, 24);
+    int btnY = Scale(hwnd, 16);
+    int closeX = client.right - pad - btnSize;
+    int minX = closeX - btnSize - Scale(hwnd, 4);
 
-    // Breadcrumb text: "● DeckName » [Title]"
-    Gdiplus::SolidBrush deckDotBrush(ToGdiColor(DeckList[activeDeck].color));
-    float dotX = static_cast<float>(pad + Scale(hwnd, 32));
-    float dotY = static_cast<float>(Scale(hwnd, 17));
-    float dotSize = static_cast<float>(Scale(hwnd, 7));
-    g.FillEllipse(&deckDotBrush, dotX, dotY, dotSize, dotSize);
+    Gdiplus::Font headerFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10.5f)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    Gdiplus::Font btnFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 12)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
 
-    std::wstring deckName = DeckList[activeDeck].name;
-    if (deckName.size() > 1) {
-        for (size_t k = 1; k < deckName.size(); ++k) deckName[k] = towlower(deckName[k]);
+    // Saved · 20m
+    Gdiplus::RectF savedRect(static_cast<float>(minX - Scale(hwnd, 110)), static_cast<float>(btnY), static_cast<float>(Scale(hwnd, 104)), static_cast<float>(btnSize));
+    Gdiplus::StringFormat rightSf;
+    rightSf.SetAlignment(Gdiplus::StringAlignmentFar);
+    rightSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+    g.DrawString(L"Saved \x00B7 20m", -1, &headerFont, savedRect, &rightSf, &mutedBrush);
+
+    // Minimize [—]
+    Gdiplus::RectF minRect(static_cast<float>(minX), static_cast<float>(btnY), static_cast<float>(btnSize), static_cast<float>(btnSize));
+    if (hoveredToolbarBtn == CmdMinimiseEditor) {
+        Gdiplus::GraphicsPath mp;
+        AddRoundedRectToPath(mp, minRect, static_cast<float>(Scale(hwnd, 4)));
+        Gdiplus::SolidBrush hovB(ToGdiColor(inkColor, 35));
+        g.FillPath(&hovB, &mp);
     }
-    std::wstring breadcrumb = deckName + L"   \x00BB   " + Wide(n ? (n->title.empty() ? "Untitled note" : n->title) : "");
-    g.DrawString(breadcrumb.c_str(), -1, &navFont, Gdiplus::PointF(dotX + dotSize + static_cast<float>(Scale(hwnd, 6)), static_cast<float>(Scale(hwnd, 13))), &mutedBrush);
+    g.DrawString(L"\x2014", -1, &btnFont, minRect, &centerSf, &inkBrush);
 
-    // Top right buttons: More (…), Export, Pin, Close
-    int topRBtnW = Scale(hwnd, 24);
-    int topRBtnH = Scale(hwnd, 24);
-    int topRBtnY = Scale(hwnd, 8);
-
-    // Close button
-    Gdiplus::RectF closeRect(static_cast<float>(client.right - pad - topRBtnW), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
-    Gdiplus::GraphicsPath closePath;
-    AddRoundedRectToPath(closePath, closeRect, static_cast<float>(Scale(hwnd, 4)));
-    if (hoveredToolbarBtn == CmdExitApp) {
-        Gdiplus::SolidBrush hovB(ToGdiColor(PaperInk, 35));
-        g.FillPath(&hovB, &closePath);
+    // Close [✕]
+    Gdiplus::RectF closeRect(static_cast<float>(closeX), static_cast<float>(btnY), static_cast<float>(btnSize), static_cast<float>(btnSize));
+    if (hoveredToolbarBtn == CmdCloseEditor || hoveredToolbarBtn == CmdExitApp) {
+        Gdiplus::GraphicsPath cp;
+        AddRoundedRectToPath(cp, closeRect, static_cast<float>(Scale(hwnd, 4)));
+        Gdiplus::SolidBrush hovB(ToGdiColor(inkColor, 35));
+        g.FillPath(&hovB, &cp);
     }
-    g.DrawString(L"\x2715", -1, &navFont, closeRect, &centerSf, &inkBrush);
+    g.DrawString(L"\x2715", -1, &btnFont, closeRect, &centerSf, &inkBrush);
 
-    // Pin button
-    Gdiplus::RectF pinRect(static_cast<float>(client.right - pad - topRBtnW * 2 - Scale(hwnd, 4)), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
-    Gdiplus::GraphicsPath pinPath;
-    AddRoundedRectToPath(pinPath, pinRect, static_cast<float>(Scale(hwnd, 4)));
-    if (config.pinned || hoveredToolbarBtn == CmdPinEditor) {
-        Gdiplus::SolidBrush pinActiveBrush(ToGdiColor(PaperInk, config.pinned ? 40 : 25));
-        g.FillPath(&pinActiveBrush, &pinPath);
-    }
-    g.DrawString(config.pinned ? L"\x2297" : L"\x2299", -1, &navFont, pinRect, &centerSf, &inkBrush);
+    // 2. Bottom Toolbar: Row 1 Formatting, Row 2 Colors + Actions
+    int row1Y = client.bottom - Scale(hwnd, 68);
+    int row1H = Scale(hwnd, 26);
+    int row2Y = client.bottom - Scale(hwnd, 36);
+    int row2H = Scale(hwnd, 26);
 
-    // Export button
-    Gdiplus::RectF exportTopRect(static_cast<float>(client.right - pad - topRBtnW * 3 - Scale(hwnd, 8)), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
-    Gdiplus::GraphicsPath exportTopPath;
-    AddRoundedRectToPath(exportTopPath, exportTopRect, static_cast<float>(Scale(hwnd, 4)));
-    if (hoveredToolbarBtn == CmdExportNote) {
-        Gdiplus::SolidBrush expHovB(ToGdiColor(PaperInk, 30));
-        g.FillPath(&expHovB, &exportTopPath);
-    }
-    g.DrawString(L"\x2913", -1, &navFont, exportTopRect, &centerSf, &inkBrush);
-
-    // More button (…)
-    Gdiplus::RectF moreRect(static_cast<float>(client.right - pad - topRBtnW * 4 - Scale(hwnd, 12)), static_cast<float>(topRBtnY), static_cast<float>(topRBtnW), static_cast<float>(topRBtnH));
-    Gdiplus::GraphicsPath morePath;
-    AddRoundedRectToPath(morePath, moreRect, static_cast<float>(Scale(hwnd, 4)));
-    if (hoveredToolbarBtn == CmdMoreMenu) {
-        Gdiplus::SolidBrush moreHovB(ToGdiColor(PaperInk, 30));
-        g.FillPath(&moreHovB, &morePath);
-    }
-    g.DrawString(L"\x2026", -1, &navFont, moreRect, &centerSf, &inkBrush);
-
-    // 2. Metadata line under Title
-    int metaY = Scale(hwnd, 44) + Scale(hwnd, 36) + Scale(hwnd, 2);
-    Gdiplus::Font metaFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    std::wstring metaText = L"Local note \x00B7 " + std::to_wstring(n ? Wide(n->body).size() : 0) + L" characters";
-    g.DrawString(metaText.c_str(), -1, &metaFont, Gdiplus::PointF(static_cast<float>(pad), static_cast<float>(metaY)), &mutedBrush);
-
-    // 3. Modern Flat Toolbar
-    int toolbarY = metaY + Scale(hwnd, 20) + Scale(hwnd, 6);
-    int toolbarH = Scale(hwnd, 32);
-
-    // Flat toolbar pill background
-    Gdiplus::RectF toolbarRect(static_cast<float>(pad), static_cast<float>(toolbarY), static_cast<float>(client.right - pad * 2), static_cast<float>(toolbarH));
-    Gdiplus::GraphicsPath toolbarPath;
-    AddRoundedRectToPath(toolbarPath, toolbarRect, static_cast<float>(Scale(hwnd, 6)));
-    Gdiplus::SolidBrush toolbarBg(ToGdiColor(PaperInk, 18));
-    g.FillPath(&toolbarBg, &toolbarPath);
-
-    // Full tools array
-    struct ToolBtn { int id; const wchar_t* label; };
-    ToolBtn tools[] = {
+    // Row 1: Formatting icons
+    struct FormatBtn { int id; const wchar_t* label; };
+    FormatBtn fbtns[] = {
         {CmdBoldText, L"B"},
         {CmdItalicText, L"I"},
+        {CmdStrikeText, L"U"},
         {CmdStrikeText, L"S"},
-        {CmdHeading1, L"H1"},
-        {CmdHeading2, L"H2"},
-        {CmdHeading3, L"H3"},
-        {CmdBulletText, L"\x2022"},
-        {CmdChecklistText, L"\x25A2"},
-        {CmdNumberedList, L"1."},
-        {CmdCodeBlock, L"</>"},
-        {CmdInsertLink, L"\x221E"},
-        {CmdUndoText, L"\x21B6"},
-        {CmdRedoText, L"\x21B7"}
+        {0, L"|"},
+        {CmdChecklistText, L"\x2611"},
+        {CmdBulletText, L":="},
+        {CmdNumberedList, L"1="},
+        {0, L"|"},
+        {CmdInsertLink, L"\xD83D\xDD17"},
+        {CmdNormalText, L"Aa"},
+        {CmdMoreMenu, L"\x2026"}
     };
 
-    int btnX = pad + Scale(hwnd, 4);
-    int btnW = Scale(hwnd, 24);
-    int btnH = Scale(hwnd, 22);
-    int btnY = toolbarY + Scale(hwnd, 5);
+    int fBtnX = pad;
+    Gdiplus::Font fmtFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::Pen divPen(ToGdiColor(inkColor, 40), 1.0f);
 
-    Gdiplus::Font btnFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-    for (const auto& tb : tools) {
-        Gdiplus::RectF tr(static_cast<float>(btnX), static_cast<float>(btnY), static_cast<float>(btnW), static_cast<float>(btnH));
-        if (hoveredToolbarBtn == tb.id) {
-            Gdiplus::GraphicsPath tp;
-            AddRoundedRectToPath(tp, tr, static_cast<float>(Scale(hwnd, 3)));
-            Gdiplus::SolidBrush hovB(ToGdiColor(PaperInk, 35));
-            g.FillPath(&hovB, &tp);
+    for (const auto& fb : fbtns) {
+        if (fb.id == 0) {
+            g.DrawLine(&divPen, fBtnX + Scale(hwnd, 5), row1Y + Scale(hwnd, 4), fBtnX + Scale(hwnd, 5), row1Y + row1H - Scale(hwnd, 4));
+            fBtnX += Scale(hwnd, 12);
+            continue;
         }
-        g.DrawString(tb.label, -1, &btnFont, tr, &centerSf, &inkBrush);
-        btnX += btnW + Scale(hwnd, 2);
+        int btnW = Scale(hwnd, 24);
+        Gdiplus::RectF br(static_cast<float>(fBtnX), static_cast<float>(row1Y), static_cast<float>(btnW), static_cast<float>(row1H));
+        if (hoveredToolbarBtn == fb.id) {
+            Gdiplus::GraphicsPath bp;
+            AddRoundedRectToPath(bp, br, static_cast<float>(Scale(hwnd, 4)));
+            Gdiplus::SolidBrush hovB(ToGdiColor(inkColor, 35));
+            g.FillPath(&hovB, &bp);
+        }
+        g.DrawString(fb.label, -1, &fmtFont, br, &centerSf, &inkBrush);
+        fBtnX += btnW + Scale(hwnd, 3);
     }
 
-    // Divider
-    btnX += Scale(hwnd, 2);
-    Gdiplus::Pen divPen(ToGdiColor(PaperInk, 30), 1.0f);
-    g.DrawLine(&divPen, btnX, btnY + 2, btnX, btnY + btnH - 2);
-    btnX += Scale(hwnd, 6);
+    // Row 2: Left 8 color swatches + Right actions
+    int swX = pad;
+    int swSize = Scale(hwnd, 14);
+    int swY = row2Y + (row2H - swSize) / 2;
 
-    // 8 Pastel color swatches
-    int swatchSize = Scale(hwnd, 13);
-    int swatchY = btnY + (btnH - swatchSize) / 2;
     for (int c = 0; c < 8; ++c) {
-        Gdiplus::RectF sr(static_cast<float>(btnX), static_cast<float>(swatchY), static_cast<float>(swatchSize), static_cast<float>(swatchSize));
+        Gdiplus::RectF sr(static_cast<float>(swX), static_cast<float>(swY), static_cast<float>(swSize), static_cast<float>(swSize));
         Gdiplus::SolidBrush sBrush(ToGdiColor(PaperColors[c]));
         g.FillEllipse(&sBrush, sr);
         if (n && (n->color % 8) == static_cast<unsigned>(c)) {
-            Gdiplus::Pen selPen(ToGdiColor(PaperInk), 2.0f);
-            g.DrawEllipse(&selPen, sr);
+            // Distinct focus ring
+            Gdiplus::Pen selPen(ToGdiColor(inkColor), 2.0f);
+            Gdiplus::RectF ring(sr.X - 2.5f, sr.Y - 2.5f, sr.Width + 5.0f, sr.Height + 5.0f);
+            g.DrawEllipse(&selPen, ring);
         } else if (hoveredToolbarBtn == CmdColorBase + c) {
-            Gdiplus::Pen hovPen(ToGdiColor(PaperInk, 120), 1.5f);
+            Gdiplus::Pen hovPen(ToGdiColor(inkColor, 120), 1.5f);
             g.DrawEllipse(&hovPen, sr);
-        } else {
-            Gdiplus::Pen sPen(ToGdiColor(PaperBorder), 1.0f);
-            g.DrawEllipse(&sPen, sr);
         }
-        btnX += swatchSize + Scale(hwnd, 5);
+        swX += swSize + Scale(hwnd, 8);
     }
 
-    // Right-aligned action buttons: Archive, Delete
-    int actionX = client.right - pad - Scale(hwnd, 4);
-    ToolBtn actions[] = {
-        {CmdDeleteNote, L"\x2715"},  // Delete
-        {CmdRestoreNote, L"\x25A4"}  // Archive
-    };
+    // Right actions: Delete (red), Mark complete, Close
+    int actRight = client.right - pad;
+    Gdiplus::Font actFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10.5f)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 
-    for (const auto& act : actions) {
-        actionX -= btnW;
-        Gdiplus::RectF ar(static_cast<float>(actionX), static_cast<float>(btnY), static_cast<float>(btnW), static_cast<float>(btnH));
-        if (hoveredToolbarBtn == act.id) {
-            Gdiplus::GraphicsPath ap;
-            AddRoundedRectToPath(ap, ar, static_cast<float>(Scale(hwnd, 3)));
-            Gdiplus::SolidBrush hovB(ToGdiColor(PaperInk, 35));
-            g.FillPath(&hovB, &ap);
-        }
-        g.DrawString(act.label, -1, &btnFont, ar, &centerSf, &inkBrush);
-        actionX -= Scale(hwnd, 4);
+    // Close
+    int closeTxtW = Scale(hwnd, 44);
+    actRight -= closeTxtW;
+    Gdiplus::RectF cr(static_cast<float>(actRight), static_cast<float>(row2Y), static_cast<float>(closeTxtW), static_cast<float>(row2H));
+    if (hoveredToolbarBtn == CmdCloseEditor) {
+        Gdiplus::GraphicsPath cp;
+        AddRoundedRectToPath(cp, cr, static_cast<float>(Scale(hwnd, 4)));
+        Gdiplus::SolidBrush hovB(ToGdiColor(inkColor, 25));
+        g.FillPath(&hovB, &cp);
     }
+    g.DrawString(L"Close", -1, &actFont, cr, &centerSf, &inkBrush);
 
-    // 4. Delete Undo bar (E12)
-    if (store.deleted && GetTickCount64() < store.deleted->expires) {
-        int statusH = Scale(hwnd, 26);
-        Gdiplus::RectF delBar(static_cast<float>(pad), static_cast<float>(client.bottom - statusH - Scale(hwnd, 28)), static_cast<float>(client.right - pad * 2), static_cast<float>(Scale(hwnd, 22)));
-        Gdiplus::GraphicsPath delPath;
-        AddRoundedRectToPath(delPath, delBar, static_cast<float>(Scale(hwnd, 4)));
-        Gdiplus::SolidBrush delBg(ToGdiColor(PaperInk, (hoveredToolbarBtn == CmdUndoDelete ? 40 : 25)));
-        g.FillPath(&delBg, &delPath);
-        g.DrawString(L"Note deleted \x00B7 Click here to Undo (Ctrl+Z)", -1, &navFont, delBar, &centerSf, &inkBrush);
+    // Mark complete
+    int markTxtW = Scale(hwnd, 96);
+    actRight -= (markTxtW + Scale(hwnd, 6));
+    Gdiplus::RectF mr(static_cast<float>(actRight), static_cast<float>(row2Y), static_cast<float>(markTxtW), static_cast<float>(row2H));
+    if (hoveredToolbarBtn == CmdMarkComplete) {
+        Gdiplus::GraphicsPath mp;
+        AddRoundedRectToPath(mp, mr, static_cast<float>(Scale(hwnd, 4)));
+        Gdiplus::SolidBrush hovB(ToGdiColor(inkColor, 25));
+        g.FillPath(&hovB, &mp);
     }
+    std::wstring markText = (n && n->archived) ? L"Restore note" : L"Mark complete";
+    g.DrawString(markText.c_str(), -1, &actFont, mr, &centerSf, &inkBrush);
+
+    // Delete (Red text)
+    int delTxtW = Scale(hwnd, 52);
+    actRight -= (delTxtW + Scale(hwnd, 6));
+    Gdiplus::RectF dr(static_cast<float>(actRight), static_cast<float>(row2Y), static_cast<float>(delTxtW), static_cast<float>(row2H));
+    if (hoveredToolbarBtn == CmdDeleteNote) {
+        Gdiplus::GraphicsPath dp;
+        AddRoundedRectToPath(dp, dr, static_cast<float>(Scale(hwnd, 4)));
+        Gdiplus::SolidBrush hovB(Gdiplus::Color(35, 239, 68, 68));
+        g.FillPath(&hovB, &dp);
+    }
+    Gdiplus::SolidBrush redBrush(Gdiplus::Color(255, 220, 38, 38));
+    g.DrawString(L"Delete", -1, &actFont, dr, &centerSf, &redBrush);
 
     buffer.end(hdc);
     EndPaint(hwnd, &ps);
@@ -2547,80 +2640,67 @@ int HitTestEditor(HWND hwnd, int x, int y) {
     RECT client;
     GetClientRect(hwnd, &client);
     int pad = Scale(hwnd, 20);
-    int topRBtnW = Scale(hwnd, 24);
-    int topRBtnH = Scale(hwnd, 24);
-    int topRBtnY = Scale(hwnd, 8);
+    int btnSize = Scale(hwnd, 24);
+    int btnY = Scale(hwnd, 16);
+    int closeX = client.right - pad - btnSize;
+    int minX = closeX - btnSize - Scale(hwnd, 4);
 
-    // Topbar back button
-    if (x >= pad && x <= pad + Scale(hwnd, 24) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
-        return CmdBackToDeck;
-    }
-    // Close button
-    if (x >= client.right - pad - topRBtnW && x <= client.right - pad && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
-        return CmdExitApp; // Will collapse editor
-    }
-    // Pin button
-    if (x >= client.right - pad - topRBtnW * 2 - Scale(hwnd, 4) && x <= client.right - pad - topRBtnW - Scale(hwnd, 4) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
-        return CmdPinEditor;
-    }
-    // Export button
-    if (x >= client.right - pad - topRBtnW * 3 - Scale(hwnd, 8) && x <= client.right - pad - topRBtnW * 2 - Scale(hwnd, 8) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
-        return CmdExportNote;
-    }
-    // More button (…)
-    if (x >= client.right - pad - topRBtnW * 4 - Scale(hwnd, 12) && x <= client.right - pad - topRBtnW * 3 - Scale(hwnd, 12) && y >= topRBtnY && y <= topRBtnY + topRBtnH) {
-        return CmdMoreMenu;
-    }
+    // Minimize [—]
+    if (x >= minX && x <= minX + btnSize && y >= btnY && y <= btnY + btnSize) return CmdMinimiseEditor;
+    // Close [✕]
+    if (x >= closeX && x <= closeX + btnSize && y >= btnY && y <= btnY + btnSize) return CmdCloseEditor;
 
-    // Delete undo bar hit test
-    if (store.deleted && GetTickCount64() < store.deleted->expires) {
-        int statusH = Scale(hwnd, 26);
-        int barY = client.bottom - statusH - Scale(hwnd, 28);
-        if (x >= pad && x <= client.right - pad && y >= barY && y <= barY + Scale(hwnd, 22)) {
-            return CmdUndoDelete;
-        }
-    }
+    int row1Y = client.bottom - Scale(hwnd, 68);
+    int row1H = Scale(hwnd, 26);
+    int row2Y = client.bottom - Scale(hwnd, 36);
+    int row2H = Scale(hwnd, 26);
 
-    // Toolbar hit testing
-    int metaY = Scale(hwnd, 44) + Scale(hwnd, 36) + Scale(hwnd, 2);
-    int toolbarY = metaY + Scale(hwnd, 20) + Scale(hwnd, 6);
-    int toolbarH = Scale(hwnd, 32);
-
-    if (y >= toolbarY && y <= toolbarY + toolbarH) {
-        int btnX = pad + Scale(hwnd, 4);
-        int btnW = Scale(hwnd, 24);
-        int btnH = Scale(hwnd, 22);
-        int btnY = toolbarY + Scale(hwnd, 5);
-
+    // Row 1: Formatting icons
+    if (y >= row1Y && y <= row1Y + row1H) {
+        int fBtnX = pad;
         int tools[] = {
-            CmdBoldText, CmdItalicText, CmdStrikeText,
-            CmdHeading1, CmdHeading2, CmdHeading3,
-            CmdBulletText, CmdChecklistText, CmdNumberedList,
-            CmdCodeBlock, CmdInsertLink, CmdUndoText, CmdRedoText
+            CmdBoldText, CmdItalicText, CmdStrikeText, CmdStrikeText,
+            0,
+            CmdChecklistText, CmdBulletText, CmdNumberedList,
+            0,
+            CmdInsertLink, CmdNormalText, CmdMoreMenu
         };
         for (int cmd : tools) {
-            if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) return cmd;
-            btnX += btnW + Scale(hwnd, 2);
+            if (cmd == 0) {
+                fBtnX += Scale(hwnd, 12);
+                continue;
+            }
+            int btnW = Scale(hwnd, 24);
+            if (x >= fBtnX && x <= fBtnX + btnW) return cmd;
+            fBtnX += btnW + Scale(hwnd, 3);
         }
+    }
 
-        // Color swatches
-        btnX += Scale(hwnd, 8);
-        int swatchSize = Scale(hwnd, 13);
+    // Row 2: Swatches and actions
+    if (y >= row2Y && y <= row2Y + row2H) {
+        // Swatches
+        int swX = pad;
+        int swSize = Scale(hwnd, 14);
         for (int c = 0; c < 8; ++c) {
-            if (x >= btnX - 2 && x <= btnX + swatchSize + 2) {
+            if (x >= swX - 3 && x <= swX + swSize + 3) {
                 return CmdColorBase + c;
             }
-            btnX += swatchSize + Scale(hwnd, 5);
+            swX += swSize + Scale(hwnd, 8);
         }
 
-        // Right actions
-        int actionX = client.right - pad - Scale(hwnd, 4);
-        int actions[] = {CmdDeleteNote, CmdRestoreNote};
-        for (int act : actions) {
-            actionX -= btnW;
-            if (x >= actionX && x <= actionX + btnW && y >= btnY && y <= btnY + btnH) return act;
-            actionX -= Scale(hwnd, 4);
-        }
+        // Right actions: Delete, Mark complete, Close
+        int actRight = client.right - pad;
+        int closeTxtW = Scale(hwnd, 44);
+        actRight -= closeTxtW;
+        if (x >= actRight && x <= actRight + closeTxtW) return CmdCloseEditor;
+
+        int markTxtW = Scale(hwnd, 96);
+        actRight -= (markTxtW + Scale(hwnd, 6));
+        if (x >= actRight && x <= actRight + markTxtW) return CmdMarkComplete;
+
+        int delTxtW = Scale(hwnd, 52);
+        actRight -= (delTxtW + Scale(hwnd, 6));
+        if (x >= actRight && x <= actRight + delTxtW) return CmdDeleteNote;
     }
 
     return 0;
@@ -2819,247 +2899,528 @@ void PaintManager(HWND hwnd) {
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
 
-    // Night Surface background
+    // Main surface background #161719
     Gdiplus::SolidBrush bgBrush(ToGdiColor(NightSurface));
     g.FillRectangle(&bgBrush, 0, 0, client.right, client.bottom);
 
     int pad = Scale(hwnd, 16);
-    int topH = Scale(hwnd, 50);
+    int bannerH = Scale(hwnd, 54);
 
-    // 1. Header: Layers logo, "EdgeNotes", "All your thoughts, together."
-    Gdiplus::Font logoFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 14)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush mintBrush(ToGdiColor(PaperColors[0]));
-    g.FillEllipse(&mintBrush, pad, Scale(hwnd, 18), Scale(hwnd, 10), Scale(hwnd, 10));
+    // -------------------------------------------------------------
+    // TOP TRIAL BANNER (#261C3B)
+    // -------------------------------------------------------------
+    Gdiplus::SolidBrush bannerBg(ToGdiColor(NightBanner));
+    g.FillRectangle(&bannerBg, 0, 0, client.right, bannerH);
 
-    Gdiplus::SolidBrush inkBrush(ToGdiColor(NightInk));
-    g.DrawString(L"EdgeNotes", -1, &logoFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 16)), static_cast<float>(Scale(hwnd, 14))), &inkBrush);
+    // Clock icon circle (purple outline)
+    int clockSize = Scale(hwnd, 22);
+    int clockX = pad + Scale(hwnd, 2);
+    int clockY = (bannerH - clockSize) / 2;
+    Gdiplus::Pen clockPen(Gdiplus::Color(255, 167, 139, 250), 1.5f);
+    g.DrawEllipse(&clockPen, clockX, clockY, clockSize, clockSize);
+    int cx = clockX + clockSize / 2;
+    int cy = clockY + clockSize / 2;
+    g.DrawLine(&clockPen, cx, cy, cx, cy - Scale(hwnd, 5));
+    g.DrawLine(&clockPen, cx, cy, cx + Scale(hwnd, 4), cy);
 
-    Gdiplus::Font subFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush mutedBrush(ToGdiColor(NightMuted));
-    g.DrawString(L"All your thoughts, together.", -1, &subFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 96)), static_cast<float>(Scale(hwnd, 16))), &mutedBrush);
+    // Banner Text
+    Gdiplus::Font bannerTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::SolidBrush whiteBrush(Gdiplus::Color(255, 255, 255, 255));
+    g.DrawString(L"6 days left in your free trial", -1, &bannerTitleFont, Gdiplus::PointF(static_cast<float>(clockX + clockSize + Scale(hwnd, 10)), static_cast<float>(clockY - Scale(hwnd, 2))), &whiteBrush);
 
-    // Header divider line
-    Gdiplus::Pen borderPen(ToGdiColor(NightBorder), 1.0f);
-    g.DrawLine(&borderPen, 0, topH, client.right, topH);
+    Gdiplus::Font bannerSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    Gdiplus::SolidBrush bannerSubBrush(Gdiplus::Color(255, 196, 181, 253));
+    g.DrawString(L"Everything is unlocked until Monday 26 October. After that your notes stay readable and exportable, but editing is locked.", -1, &bannerSubFont, Gdiplus::PointF(static_cast<float>(clockX + clockSize + Scale(hwnd, 10)), static_cast<float>(clockY + Scale(hwnd, 14))), &bannerSubBrush);
 
-    // 2. Three-column layout
-    int col1W = Scale(hwnd, 180); // Nav
-    int col2W = Scale(hwnd, 320); // List
-    int col3W = client.right - col1W - col2W; // Preview
+    // Banner Buttons on Right
+    int btnH = Scale(hwnd, 28);
+    int btnY = (bannerH - btnH) / 2;
 
-    int bodyY = topH + 1;
-    int bodyH = client.bottom - bodyY;
-
-    // Col 1: Navigation Filters
-    int navY = bodyY + Scale(hwnd, 14);
-    int btnH = Scale(hwnd, 30);
-
-    // [+ New note] mint button
-    Gdiplus::RectF newBtn(static_cast<float>(pad), static_cast<float>(navY), static_cast<float>(col1W - pad * 2), static_cast<float>(btnH));
-    Gdiplus::GraphicsPath newPath;
-    AddRoundedRectToPath(newPath, newBtn, static_cast<float>(Scale(hwnd, 6)));
-    g.FillPath(&mintBrush, &newPath);
-    Gdiplus::Font newBtnFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush darkText(ToGdiColor(PaperInk));
+    // [Buy Peeky Notes]
+    int buyW = Scale(hwnd, 126);
+    int buyX = client.right - pad - buyW;
+    Gdiplus::RectF buyRect(static_cast<float>(buyX), static_cast<float>(btnY), static_cast<float>(buyW), static_cast<float>(btnH));
+    Gdiplus::GraphicsPath buyPath;
+    AddRoundedRectToPath(buyPath, buyRect, static_cast<float>(Scale(hwnd, 14)));
+    Gdiplus::SolidBrush buyBg(ToGdiColor(NightAccent));
+    g.FillPath(&buyBg, &buyPath);
+    Gdiplus::Font buyFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     Gdiplus::StringFormat centerSf;
     centerSf.SetAlignment(Gdiplus::StringAlignmentCenter);
     centerSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    g.DrawString(L"+ New note", -1, &newBtnFont, newBtn, &centerSf, &darkText);
+    g.DrawString(L"Buy Peeky Notes", -1, &buyFont, buyRect, &centerSf, &whiteBrush);
 
-    navY += btnH + Scale(hwnd, 12);
+    // [Enter a key]
+    int keyW = Scale(hwnd, 90);
+    int keyX = buyX - keyW - Scale(hwnd, 10);
+    Gdiplus::RectF keyRect(static_cast<float>(keyX), static_cast<float>(btnY), static_cast<float>(keyW), static_cast<float>(btnH));
+    Gdiplus::GraphicsPath keyPath;
+    AddRoundedRectToPath(keyPath, keyRect, static_cast<float>(Scale(hwnd, 14)));
+    Gdiplus::SolidBrush keyBg(Gdiplus::Color(255, 30, 24, 46));
+    g.FillPath(&keyBg, &keyPath);
+    Gdiplus::Pen keyPen(Gdiplus::Color(255, 76, 61, 110), 1.0f);
+    g.DrawPath(&keyPen, &keyPath);
+    Gdiplus::Font keyFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9.5f)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    g.DrawString(L"Enter a key", -1, &keyFont, keyRect, &centerSf, &whiteBrush);
 
-    // Counts
-    std::size_t deckCount = 0, archCount = 0, tasksCount = 0, notesCount = 0, thoughtsCount = 0;
-    for (const auto& n : store.notes) {
-        if (n.archived) {
-            archCount++;
-        } else {
-            deckCount++;
-            if (n.color == 1) notesCount++;
-            else if (n.color == 4) thoughtsCount++;
-            else tasksCount++;
-        }
-    }
+    // -------------------------------------------------------------
+    // LEFT SIDEBAR (#121315)
+    // -------------------------------------------------------------
+    int col1W = Scale(hwnd, 190);
+    int bodyY = bannerH;
+    int bodyH = client.bottom - bodyY;
 
-    struct NavItem { int id; const wchar_t* label; std::size_t count; bool isSub; };
-    NavItem navs[] = {
-        {CmdFilterAll, L"All notes", store.notes.size(), false},
-        {CmdFilterDeck, L"On the deck", deckCount, false},
-        {CmdFilterTasks, L"\x2611  Tasks", tasksCount, true},
-        {CmdFilterNotes, L"\x2630  Notes", notesCount, true},
-        {CmdFilterThoughts, L"\x2726  Thoughts", thoughtsCount, true},
-        {CmdFilterArchive, L"Archive", archCount, false}
-    };
+    Gdiplus::SolidBrush sideBg(ToGdiColor(NightSidebar));
+    g.FillRectangle(&sideBg, 0, bodyY, col1W, bodyH);
 
-    Gdiplus::Font navItemFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    Gdiplus::Font navSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-
-    for (const auto& item : navs) {
-        bool selected = (managerFilter == item.id);
-        int itemIndent = item.isSub ? Scale(hwnd, 12) : 0;
-        int rowH = item.isSub ? Scale(hwnd, 24) : Scale(hwnd, 28);
-        Gdiplus::RectF nr(static_cast<float>(pad + itemIndent), static_cast<float>(navY), static_cast<float>(col1W - pad * 2 - itemIndent), static_cast<float>(rowH));
-        if (selected) {
-            Gdiplus::GraphicsPath selPath;
-            AddRoundedRectToPath(selPath, nr, static_cast<float>(Scale(hwnd, 4)));
-            Gdiplus::SolidBrush selBg(ToGdiColor(NightSelected));
-            g.FillPath(&selBg, &selPath);
-        }
-        g.DrawString(item.label, -1, item.isSub ? &navSubFont : &navItemFont, Gdiplus::PointF(nr.X + Scale(hwnd, 6), nr.Y + (item.isSub ? 3 : 5)), selected ? &inkBrush : &mutedBrush);
-
-        std::wstring countStr = std::to_wstring(item.count);
-        Gdiplus::StringFormat rightSf;
-        rightSf.SetAlignment(Gdiplus::StringAlignmentFar);
-        rightSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-        g.DrawString(countStr.c_str(), -1, &subFont, Gdiplus::RectF(nr.X, nr.Y, nr.Width - Scale(hwnd, 6), nr.Height), &rightSf, &mutedBrush);
-
-        navY += rowH + Scale(hwnd, 2);
-    }
-
-    // M7: "Saved on this device" at bottom of Col 1
-    Gdiplus::Font savedFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    g.DrawString(L"\x2713 Saved on this device", -1, &savedFont, Gdiplus::PointF(static_cast<float>(pad), static_cast<float>(client.bottom - Scale(hwnd, 26))), &mutedBrush);
-
-    // Col 1 border
+    Gdiplus::Pen borderPen(ToGdiColor(NightBorder), 1.0f);
     g.DrawLine(&borderPen, col1W, bodyY, col1W, client.bottom);
 
-    // Col 2: Notes List
-    int col2X = col1W;
-    Gdiplus::SolidBrush panelBg(ToGdiColor(NightPanel));
-    g.FillRectangle(&panelBg, col2X, bodyY, col2W, bodyH);
+    // NOTES Section header
+    Gdiplus::Font sideGroupFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 8.5f)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::SolidBrush mutedTextBrush(ToGdiColor(NightMuted));
+    g.DrawString(L"NOTES", -1, &sideGroupFont, Gdiplus::PointF(static_cast<float>(pad), static_cast<float>(bodyY + Scale(hwnd, 16))), &mutedTextBrush);
 
-    // Header of Col 2
-    int listHeadY = bodyY + Scale(hwnd, 12);
-    const wchar_t* listTitle = L"All notes";
-    if (managerFilter == CmdFilterDeck) listTitle = L"On the deck";
-    else if (managerFilter == CmdFilterTasks) listTitle = L"Tasks";
-    else if (managerFilter == CmdFilterNotes) listTitle = L"Notes";
-    else if (managerFilter == CmdFilterThoughts) listTitle = L"Thoughts";
-    else if (managerFilter == CmdFilterArchive) listTitle = L"Archive";
-    g.DrawString(listTitle, -1, &logoFont, Gdiplus::PointF(static_cast<float>(col2X + pad), static_cast<float>(listHeadY)), &inkBrush);
+    // Nav Items: All notes, On the deck, Archive
+    struct NavItemDef { int id; const wchar_t* icon; const wchar_t* label; };
+    NavItemDef navs[] = {
+        {CmdNavNotes, L"\x229E", L"All notes"},
+        {CmdNavDeck, L"\x2691", L"On the deck"},
+        {CmdNavArchive, L"\x25A4", L"Archive"}
+    };
 
-    // Header action buttons: [Import] [Backup] [Sort ▾]
-    int actBtnH = Scale(hwnd, 20);
-    int rightX = col2X + col2W - pad;
+    int navY = bodyY + Scale(hwnd, 36);
+    int navH = Scale(hwnd, 32);
+    Gdiplus::Font navFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10.5f)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
 
-    // Export Backup button (M5)
-    int backupW = Scale(hwnd, 24);
-    rightX -= backupW;
-    Gdiplus::RectF backupRect(static_cast<float>(rightX), static_cast<float>(listHeadY), static_cast<float>(backupW), static_cast<float>(actBtnH));
-    g.DrawString(L"\x2913", -1, &navItemFont, backupRect, &centerSf, &mutedBrush);
-
-    // Import button (M4)
-    int importW = Scale(hwnd, 24);
-    rightX -= (importW + Scale(hwnd, 4));
-    Gdiplus::RectF importRect(static_cast<float>(rightX), static_cast<float>(listHeadY), static_cast<float>(importW), static_cast<float>(actBtnH));
-    g.DrawString(L"\x2912", -1, &navItemFont, importRect, &centerSf, &mutedBrush);
-
-    // Sort dropdown button (M2)
-    const wchar_t* sortLabel = (managerSortMode == 0) ? L"Recent \x25BE" : (managerSortMode == 1 ? L"A-Z \x25BE" : L"Order \x25BE");
-    int sortW = Scale(hwnd, 58);
-    rightX -= (sortW + Scale(hwnd, 6));
-    Gdiplus::RectF sortRect(static_cast<float>(rightX), static_cast<float>(listHeadY), static_cast<float>(sortW), static_cast<float>(actBtnH));
-    g.DrawString(sortLabel, -1, &subFont, sortRect, &centerSf, &mutedBrush);
-
-    // Notes list items
-    int itemY = bodyY + Scale(hwnd, 72);
-    int itemH = Scale(hwnd, 64);
-    int itemPad = Scale(hwnd, 8);
-
-    for (std::size_t i = 0; i < managerRows.size(); ++i) {
-        if (itemY + itemH > client.bottom) break;
-
-        auto* n = GetNoteById(managerRows[i]);
-        if (!n) continue;
-
-        bool isSelected = (managerSelectedId == n->id);
-        bool isHovered = (hoveredManagerRow == static_cast<int>(i));
-
-        Gdiplus::RectF ir(static_cast<float>(col2X + itemPad), static_cast<float>(itemY), static_cast<float>(col2W - itemPad * 2), static_cast<float>(itemH));
-        if (isSelected) {
-            Gdiplus::GraphicsPath ip;
-            AddRoundedRectToPath(ip, ir, static_cast<float>(Scale(hwnd, 5)));
-            Gdiplus::SolidBrush selB(ToGdiColor(NightSurface));
-            g.FillPath(&selB, &ip);
-            Gdiplus::Pen selP(ToGdiColor(PaperColors[0], 120), 1.0f);
-            g.DrawPath(&selP, &ip);
-        } else if (isHovered) {
-            Gdiplus::GraphicsPath ip;
-            AddRoundedRectToPath(ip, ir, static_cast<float>(Scale(hwnd, 5)));
-            Gdiplus::SolidBrush hovB(ToGdiColor(NightSurface, 120));
-            g.FillPath(&hovB, &ip);
+    for (const auto& item : navs) {
+        bool isSel = false;
+        if (managerNavSection == 0) {
+            if (item.id == CmdNavNotes && managerFilter == CmdFilterAll) isSel = true;
+            else if (item.id == CmdNavDeck && managerFilter == CmdFilterDeck) isSel = true;
+            else if (item.id == CmdNavArchive && managerFilter == CmdFilterArchive) isSel = true;
         }
 
-        // Color stripe
-        Gdiplus::RectF stripeRect(ir.X + Scale(hwnd, 6), ir.Y + Scale(hwnd, 12), static_cast<float>(Scale(hwnd, 3)), static_cast<float>(Scale(hwnd, 40)));
-        Gdiplus::GraphicsPath stripePath;
-        AddRoundedRectToPath(stripePath, stripeRect, static_cast<float>(Scale(hwnd, 1)));
-        Gdiplus::SolidBrush stripeBrush(ToGdiColor(PaperColors[n->color % 8]));
-        g.FillPath(&stripeBrush, &stripePath);
+        Gdiplus::RectF nr(static_cast<float>(pad - 4), static_cast<float>(navY), static_cast<float>(col1W - pad * 2 + 8), static_cast<float>(navH));
+        if (isSel) {
+            Gdiplus::GraphicsPath np;
+            AddRoundedRectToPath(np, nr, static_cast<float>(Scale(hwnd, 6)));
+            Gdiplus::SolidBrush selBg(ToGdiColor(NightAccent));
+            g.FillPath(&selBg, &np);
+        }
 
-        // Note title
-        std::wstring itemTitle = Wide(n->title.empty() ? "Untitled note" : n->title);
-        Gdiplus::Font rowTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        g.DrawString(itemTitle.c_str(), -1, &rowTitleFont, Gdiplus::PointF(ir.X + Scale(hwnd, 16), ir.Y + Scale(hwnd, 10)), &inkBrush);
+        Gdiplus::PointF iconPt(nr.X + Scale(hwnd, 10), nr.Y + Scale(hwnd, 7));
+        g.DrawString(item.icon, -1, &navFont, iconPt, isSel ? &whiteBrush : &mutedTextBrush);
 
-        // Snippet
-        std::wstring snippet = Wide(n->body.substr(0, 45));
-        Gdiplus::Font rowSnippetFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        g.DrawString(snippet.c_str(), -1, &rowSnippetFont, Gdiplus::PointF(ir.X + Scale(hwnd, 16), ir.Y + Scale(hwnd, 32)), &mutedBrush);
+        Gdiplus::PointF textPt(nr.X + Scale(hwnd, 32), nr.Y + Scale(hwnd, 7));
+        g.DrawString(item.label, -1, &navFont, textPt, isSel ? &whiteBrush : &mutedTextBrush);
 
-        // M6: Date on rows
-        g.DrawString(L"Oct 18", -1, &subFont, Gdiplus::PointF(ir.X + ir.Width - Scale(hwnd, 48), ir.Y + Scale(hwnd, 10)), &mutedBrush);
-
-        itemY += itemH + Scale(hwnd, 4);
+        navY += navH + Scale(hwnd, 4);
     }
 
-    // Col 2 border
-    g.DrawLine(&borderPen, col1W + col2W, bodyY, col1W + col2W, client.bottom);
+    // Bottom Sidebar Items: Settings, About, Profile
+    int botY = client.bottom - Scale(hwnd, 120);
 
-    // Col 3: Preview Panel
-    int col3X = col1W + col2W;
-    auto* selNote = GetNoteById(managerSelectedId);
+    // Settings
+    bool isSettingsSel = (managerNavSection == 1);
+    Gdiplus::RectF setRect(static_cast<float>(pad - 4), static_cast<float>(botY), static_cast<float>(col1W - pad * 2 + 8), static_cast<float>(navH));
+    if (isSettingsSel) {
+        Gdiplus::GraphicsPath sp;
+        AddRoundedRectToPath(sp, setRect, static_cast<float>(Scale(hwnd, 6)));
+        Gdiplus::SolidBrush selBg(ToGdiColor(NightAccent));
+        g.FillPath(&selBg, &sp);
+    }
+    g.DrawString(L"\x2699", -1, &navFont, Gdiplus::PointF(setRect.X + Scale(hwnd, 10), setRect.Y + Scale(hwnd, 7)), isSettingsSel ? &whiteBrush : &mutedTextBrush);
+    g.DrawString(L"Settings", -1, &navFont, Gdiplus::PointF(setRect.X + Scale(hwnd, 32), setRect.Y + Scale(hwnd, 7)), isSettingsSel ? &whiteBrush : &mutedTextBrush);
 
-    if (selNote) {
-        // Status header
-        int prevPad = Scale(hwnd, 20);
-        int prevHeadY = bodyY + Scale(hwnd, 14);
+    // About
+    botY += navH + Scale(hwnd, 4);
+    Gdiplus::RectF abRect(static_cast<float>(pad - 4), static_cast<float>(botY), static_cast<float>(col1W - pad * 2 + 8), static_cast<float>(navH));
+    g.DrawString(L"\x2139", -1, &navFont, Gdiplus::PointF(abRect.X + Scale(hwnd, 10), abRect.Y + Scale(hwnd, 7)), &mutedTextBrush);
+    g.DrawString(L"About", -1, &navFont, Gdiplus::PointF(abRect.X + Scale(hwnd, 32), abRect.Y + Scale(hwnd, 7)), &mutedTextBrush);
 
-        std::wstring statTag = selNote->archived ? L"\x25CF ARCHIVED" : L"\x25CF ON THE DECK";
-        g.DrawString(statTag.c_str(), -1, &subFont, Gdiplus::PointF(static_cast<float>(col3X + prevPad), static_cast<float>(prevHeadY)), &mutedBrush);
+    // Profile: Not signed in
+    botY += navH + Scale(hwnd, 6);
+    int avSize = Scale(hwnd, 22);
+    Gdiplus::Pen avPen(ToGdiColor(NightMuted), 1.0f);
+    g.DrawEllipse(&avPen, pad, botY + 2, avSize, avSize);
+    g.DrawString(L"\xD83D\xDC64", -1, &bannerSubFont, Gdiplus::PointF(static_cast<float>(pad + 5), static_cast<float>(botY + 5)), &mutedTextBrush);
 
-        // Preview Paper Sheet Card
-        int sheetY = prevHeadY + Scale(hwnd, 28);
-        int sheetW = col3W - prevPad * 2;
-        int sheetH = bodyH - Scale(hwnd, 80);
+    Gdiplus::Font profTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9.5f)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    g.DrawString(L"Not signed in", -1, &profTitleFont, Gdiplus::PointF(static_cast<float>(pad + avSize + Scale(hwnd, 8)), static_cast<float>(botY)), &whiteBrush);
+    Gdiplus::Font profSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 8.5f)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    g.DrawString(L"Sign in", -1, &profSubFont, Gdiplus::PointF(static_cast<float>(pad + avSize + Scale(hwnd, 8)), static_cast<float>(botY + Scale(hwnd, 14))), &mutedTextBrush);
 
-        Gdiplus::RectF sheetRect(static_cast<float>(col3X + prevPad), static_cast<float>(sheetY), static_cast<float>(sheetW), static_cast<float>(sheetH));
-        Gdiplus::GraphicsPath sheetPath;
-        AddRoundedRectToPath(sheetPath, sheetRect, static_cast<float>(Scale(hwnd, 8)));
-        Gdiplus::SolidBrush sheetBg(ToGdiColor(PaperColors[selNote->color % 8]));
-        g.FillPath(&sheetBg, &sheetPath);
-        Gdiplus::Pen sheetBorder(ToGdiColor(PaperBorder, 100), 1.0f);
-        g.DrawPath(&sheetBorder, &sheetPath);
+    // -------------------------------------------------------------
+    // RIGHT CONTENT: SETTINGS (Screenshot 2) OR NOTES LIST (Screenshot 1)
+    // -------------------------------------------------------------
+    if (managerNavSection == 1) {
+        // --- SETTINGS VIEW (Screenshot 2) ---
+        int setX = col1W + Scale(hwnd, 28);
+        int curSetY = bodyY + Scale(hwnd, 22);
+        int setContentW = client.right - col1W - Scale(hwnd, 56);
 
-        // Title on sheet
-        std::wstring sheetTitle = Wide(selNote->title.empty() ? "Untitled note" : selNote->title);
-        Gdiplus::Font sheetTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 18)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-        Gdiplus::SolidBrush sheetInk(ToGdiColor(PaperInk));
-        g.DrawString(sheetTitle.c_str(), -1, &sheetTitleFont, Gdiplus::PointF(sheetRect.X + Scale(hwnd, 18), sheetRect.Y + Scale(hwnd, 18)), &sheetInk);
+        // Header
+        Gdiplus::Font setHeaderFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 20)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        g.DrawString(L"Settings", -1, &setHeaderFont, Gdiplus::PointF(static_cast<float>(setX), static_cast<float>(curSetY)), &whiteBrush);
+        curSetY += Scale(hwnd, 28);
 
-        // Body on sheet in Segoe Print handwriting
-        std::wstring sheetBody = Wide(selNote->body);
-        Gdiplus::Font sheetBodyFont(L"Segoe Print", static_cast<float>(Scale(hwnd, 12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-        Gdiplus::RectF bodyBound(sheetRect.X + Scale(hwnd, 18), sheetRect.Y + Scale(hwnd, 50), sheetRect.Width - Scale(hwnd, 36), sheetRect.Height - Scale(hwnd, 100));
-        g.DrawString(sheetBody.c_str(), -1, &sheetBodyFont, bodyBound, nullptr, &sheetInk);
+        Gdiplus::Font setSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        g.DrawString(L"How Peeky Notes behaves on this PC.", -1, &setSubFont, Gdiplus::PointF(static_cast<float>(setX), static_cast<float>(curSetY)), &mutedTextBrush);
+        curSetY += Scale(hwnd, 28);
 
-        // Open Note button on bottom right of sheet
-        Gdiplus::RectF openBtnRect(sheetRect.X + sheetRect.Width - Scale(hwnd, 110), sheetRect.Y + sheetRect.Height - Scale(hwnd, 38), static_cast<float>(Scale(hwnd, 96)), static_cast<float>(Scale(hwnd, 26)));
-        Gdiplus::GraphicsPath openBtnPath;
-        AddRoundedRectToPath(openBtnPath, openBtnRect, static_cast<float>(Scale(hwnd, 4)));
-        Gdiplus::SolidBrush openBtnBg(ToGdiColor(NightSurface));
-        g.FillPath(&openBtnBg, &openBtnPath);
-        g.DrawString(L"Open note \x2197", -1, &newBtnFont, openBtnRect, &centerSf, &mintBrush);
+        auto drawCard = [&](int y, int h) {
+            Gdiplus::RectF cr(static_cast<float>(setX), static_cast<float>(y), static_cast<float>(setContentW), static_cast<float>(h));
+            Gdiplus::GraphicsPath cp;
+            AddRoundedRectToPath(cp, cr, static_cast<float>(Scale(hwnd, 8)));
+            Gdiplus::SolidBrush cardBg(ToGdiColor(NightPanel));
+            g.FillPath(&cardBg, &cp);
+            Gdiplus::Pen cardPen(ToGdiColor(NightBorder), 1.0f);
+            g.DrawPath(&cardPen, &cp);
+        };
+
+        Gdiplus::Font secHeadFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        Gdiplus::Font itemTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10.5f)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        Gdiplus::Font itemSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::Font pillFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9.5f)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+
+        // Group 1: Appearance
+        g.DrawString(L"Appearance", -1, &secHeadFont, Gdiplus::PointF(static_cast<float>(setX), static_cast<float>(curSetY)), &whiteBrush);
+        curSetY += Scale(hwnd, 20);
+
+        int card1H = Scale(hwnd, 126);
+        drawCard(curSetY, card1H);
+
+        // Row 1.1: Theme
+        int r1Y = curSetY + Scale(hwnd, 14);
+        g.DrawString(L"Theme", -1, &itemTitleFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(r1Y)), &whiteBrush);
+        g.DrawString(L"Follows Windows unless you choose otherwise.", -1, &itemSubFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(r1Y + Scale(hwnd, 18))), &mutedTextBrush);
+
+        const wchar_t* themePills[] = {L"Auto", L"Light", L"Dark"};
+        int tPillW = Scale(hwnd, 52);
+        int tPillH = Scale(hwnd, 24);
+        int pillStartX = setX + setContentW - Scale(hwnd, 16) - tPillW * 3;
+        for (int p = 0; p < 3; ++p) {
+            Gdiplus::RectF pr(static_cast<float>(pillStartX + p * tPillW), static_cast<float>(r1Y + 4), static_cast<float>(tPillW), static_cast<float>(tPillH));
+            if (appearanceTheme == p) {
+                Gdiplus::GraphicsPath pp;
+                AddRoundedRectToPath(pp, pr, static_cast<float>(Scale(hwnd, 4)));
+                Gdiplus::SolidBrush pBg(ToGdiColor(NightAccent));
+                g.FillPath(&pBg, &pp);
+                g.DrawString(themePills[p], -1, &pillFont, pr, &centerSf, &whiteBrush);
+            } else {
+                g.DrawString(themePills[p], -1, &pillFont, pr, &centerSf, &mutedTextBrush);
+            }
+        }
+
+        // Row 1.2: Font for new notes
+        int r2Y = curSetY + Scale(hwnd, 68);
+        g.DrawString(L"Font for new notes", -1, &itemTitleFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(r2Y)), &whiteBrush);
+        g.DrawString(L"Notes you have already written keep the hand they are in.", -1, &itemSubFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(r2Y + Scale(hwnd, 18))), &mutedTextBrush);
+
+        const wchar_t* fontPills[] = {L"Handwritten", L"Normal", L"Rounded", L"Typewriter"};
+        int fPillW = Scale(hwnd, 76);
+        int fPillStartX = setX + setContentW - Scale(hwnd, 16) - fPillW * 4;
+        for (int p = 0; p < 4; ++p) {
+            Gdiplus::RectF pr(static_cast<float>(fPillStartX + p * fPillW), static_cast<float>(r2Y + 4), static_cast<float>(fPillW), static_cast<float>(tPillH));
+            if (noteFontChoice == p) {
+                Gdiplus::GraphicsPath pp;
+                AddRoundedRectToPath(pp, pr, static_cast<float>(Scale(hwnd, 4)));
+                Gdiplus::SolidBrush pBg(ToGdiColor(NightAccent));
+                g.FillPath(&pBg, &pp);
+                g.DrawString(fontPills[p], -1, &pillFont, pr, &centerSf, &whiteBrush);
+            } else {
+                g.DrawString(fontPills[p], -1, &pillFont, pr, &centerSf, &mutedTextBrush);
+            }
+        }
+
+        curSetY += card1H + Scale(hwnd, 22);
+
+        // Group 2: The deck
+        g.DrawString(L"The deck", -1, &secHeadFont, Gdiplus::PointF(static_cast<float>(setX), static_cast<float>(curSetY)), &whiteBrush);
+        curSetY += Scale(hwnd, 20);
+
+        int card2H = Scale(hwnd, 126);
+        drawCard(curSetY, card2H);
+
+        // Row 2.1: Screen edge
+        int d1Y = curSetY + Scale(hwnd, 14);
+        g.DrawString(L"Screen edge", -1, &itemTitleFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(d1Y)), &whiteBrush);
+        g.DrawString(L"Which side of the display your notes live on.", -1, &itemSubFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(d1Y + Scale(hwnd, 18))), &mutedTextBrush);
+
+        const wchar_t* edgePills[] = {L"Left", L"Right"};
+        int ePillW = Scale(hwnd, 52);
+        int ePillStartX = setX + setContentW - Scale(hwnd, 16) - ePillW * 2;
+        for (int p = 0; p < 2; ++p) {
+            bool isRight = (config.side == DockSide::Right);
+            bool isSel = (p == 0 ? !isRight : isRight);
+            Gdiplus::RectF pr(static_cast<float>(ePillStartX + p * ePillW), static_cast<float>(d1Y + 4), static_cast<float>(ePillW), static_cast<float>(tPillH));
+            if (isSel) {
+                Gdiplus::GraphicsPath pp;
+                AddRoundedRectToPath(pp, pr, static_cast<float>(Scale(hwnd, 4)));
+                Gdiplus::SolidBrush pBg(ToGdiColor(NightAccent));
+                g.FillPath(&pBg, &pp);
+                g.DrawString(edgePills[p], -1, &pillFont, pr, &centerSf, &whiteBrush);
+            } else {
+                g.DrawString(edgePills[p], -1, &pillFont, pr, &centerSf, &mutedTextBrush);
+            }
+        }
+
+        // Row 2.2: Hide over fullscreen apps
+        int d2Y = curSetY + Scale(hwnd, 68);
+        g.DrawString(L"Hide over fullscreen apps", -1, &itemTitleFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(d2Y)), &whiteBrush);
+        g.DrawString(L"Keeps the deck out of games and presentations.", -1, &itemSubFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(d2Y + Scale(hwnd, 18))), &mutedTextBrush);
+
+        int swW = Scale(hwnd, 40);
+        int swH = Scale(hwnd, 20);
+        int swX = setX + setContentW - Scale(hwnd, 16) - swW;
+        int swY = d2Y + Scale(hwnd, 6);
+        Gdiplus::RectF swRect(static_cast<float>(swX), static_cast<float>(swY), static_cast<float>(swW), static_cast<float>(swH));
+        Gdiplus::GraphicsPath swPath;
+        AddRoundedRectToPath(swPath, swRect, static_cast<float>(swH / 2));
+        Gdiplus::SolidBrush swBg(hideOverFullscreen ? ToGdiColor(NightAccent) : ToGdiColor(NightBorder));
+        g.FillPath(&swBg, &swPath);
+        float thumbX = hideOverFullscreen ? (swX + swW - swH + 2.0f) : (swX + 2.0f);
+        g.FillEllipse(&whiteBrush, thumbX, static_cast<float>(swY + 2), static_cast<float>(swH - 4), static_cast<float>(swH - 4));
+
+        curSetY += card2H + Scale(hwnd, 22);
+
+        // Group 3: Startup
+        g.DrawString(L"Startup", -1, &secHeadFont, Gdiplus::PointF(static_cast<float>(setX), static_cast<float>(curSetY)), &whiteBrush);
+        curSetY += Scale(hwnd, 20);
+
+        int card3H = Scale(hwnd, 68);
+        drawCard(curSetY, card3H);
+
+        int s1Y = curSetY + Scale(hwnd, 14);
+        g.DrawString(L"Start with Windows", -1, &itemTitleFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(s1Y)), &whiteBrush);
+        g.DrawString(L"Adds a per-user entry you can remove in Task Manager.", -1, &itemSubFont, Gdiplus::PointF(static_cast<float>(setX + Scale(hwnd, 16)), static_cast<float>(s1Y + Scale(hwnd, 18))), &mutedTextBrush);
+
+        int sw3X = setX + setContentW - Scale(hwnd, 16) - swW;
+        int sw3Y = s1Y + Scale(hwnd, 6);
+        Gdiplus::RectF sw3Rect(static_cast<float>(sw3X), static_cast<float>(sw3Y), static_cast<float>(swW), static_cast<float>(swH));
+        Gdiplus::GraphicsPath sw3Path;
+        AddRoundedRectToPath(sw3Path, sw3Rect, static_cast<float>(swH / 2));
+        Gdiplus::SolidBrush sw3Bg(startWithWindows ? ToGdiColor(NightAccent) : ToGdiColor(NightBorder));
+        g.FillPath(&sw3Bg, &sw3Path);
+        float thumb3X = startWithWindows ? (sw3X + swW - swH + 2.0f) : (sw3X + 2.0f);
+        g.FillEllipse(&whiteBrush, thumb3X, static_cast<float>(sw3Y + 2), static_cast<float>(swH - 4), static_cast<float>(swH - 4));
+
+    } else {
+        // --- 3-COLUMN NOTES LIST VIEW (Screenshot 1) ---
+        int col2W = Scale(hwnd, 330);
+        int col2X = col1W;
+
+        Gdiplus::SolidBrush listBg(Gdiplus::Color(255, 24, 25, 28));
+        g.FillRectangle(&listBg, col2X, bodyY, col2W, bodyH);
+        g.DrawLine(&borderPen, col2X + col2W, bodyY, col2X + col2W, client.bottom);
+
+        int topRowY = bodyY + Scale(hwnd, 14);
+
+        // Sort button ⇅
+        int sortBtnX = col2X + col2W - Scale(hwnd, 72);
+        int sortBtnSize = Scale(hwnd, 28);
+        Gdiplus::Font sortFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::RectF sortRect(static_cast<float>(sortBtnX), static_cast<float>(topRowY), static_cast<float>(sortBtnSize), static_cast<float>(sortBtnSize));
+        g.DrawString(L"\x21C5", -1, &sortFont, sortRect, &centerSf, &mutedTextBrush);
+
+        // Round [+] button
+        int addBtnX = col2X + col2W - Scale(hwnd, 36);
+        Gdiplus::RectF addRect(static_cast<float>(addBtnX), static_cast<float>(topRowY), static_cast<float>(sortBtnSize), static_cast<float>(sortBtnSize));
+        Gdiplus::SolidBrush addBg(ToGdiColor(NightAccent));
+        g.FillEllipse(&addBg, addRect);
+        Gdiplus::Font plusFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 13)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        g.DrawString(L"+", -1, &plusFont, addRect, &centerSf, &whiteBrush);
+
+        // Section Title: "All notes"
+        int titleY = bodyY + Scale(hwnd, 54);
+        const wchar_t* listTitle = L"All notes";
+        if (managerFilter == CmdFilterDeck) listTitle = L"On the deck";
+        else if (managerFilter == CmdFilterArchive) listTitle = L"Archive";
+
+        Gdiplus::Font listTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 13.5f)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        g.DrawString(listTitle, -1, &listTitleFont, Gdiplus::PointF(static_cast<float>(col2X + pad), static_cast<float>(titleY)), &whiteBrush);
+
+        Gdiplus::Font lockFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 10)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        g.DrawString(L"\xD83D\xDD12", -1, &lockFont, Gdiplus::PointF(static_cast<float>(col2X + col2W - pad - Scale(hwnd, 12)), static_cast<float>(titleY + 2)), &mutedTextBrush);
+
+        // List Cards
+        int rowY = bodyY + Scale(hwnd, 86);
+        int rowH = Scale(hwnd, 52);
+        int cardPad = Scale(hwnd, 10);
+
+        Gdiplus::Font cardTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+        Gdiplus::Font cardSubFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+        Gdiplus::Font chipFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 7.5f)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+
+        for (std::size_t i = 0; i < managerRows.size(); ++i) {
+            if (rowY + rowH > client.bottom) break;
+
+            auto* n = GetNoteById(managerRows[i]);
+            if (!n) continue;
+
+            bool isSel = (managerSelectedId == n->id);
+            bool isHov = (hoveredManagerRow == static_cast<int>(i));
+
+            Gdiplus::RectF rr(static_cast<float>(col2X + cardPad), static_cast<float>(rowY), static_cast<float>(col2W - cardPad * 2), static_cast<float>(rowH));
+            if (isSel) {
+                Gdiplus::GraphicsPath rp;
+                AddRoundedRectToPath(rp, rr, static_cast<float>(Scale(hwnd, 8)));
+                Gdiplus::SolidBrush selBg(Gdiplus::Color(255, 37, 39, 44));
+                g.FillPath(&selBg, &rp);
+                Gdiplus::Pen selBorder(Gdiplus::Color(255, 61, 64, 74), 1.0f);
+                g.DrawPath(&selBorder, &rp);
+            } else if (isHov) {
+                Gdiplus::GraphicsPath rp;
+                AddRoundedRectToPath(rp, rr, static_cast<float>(Scale(hwnd, 8)));
+                Gdiplus::SolidBrush hovBg(Gdiplus::Color(255, 31, 33, 38));
+                g.FillPath(&hovBg, &rp);
+            }
+
+            COLORREF cDot = PaperColors[n->color % 8];
+            Gdiplus::SolidBrush dotB(ToGdiColor(cDot));
+            int dotDiameter = Scale(hwnd, 8);
+            g.FillEllipse(&dotB, rr.X + Scale(hwnd, 12), rr.Y + Scale(hwnd, 14), static_cast<float>(dotDiameter), static_cast<float>(dotDiameter));
+
+            std::wstring itemTitle = Wide(n->title.empty() ? "Untitled note" : n->title);
+            g.DrawString(itemTitle.c_str(), -1, &cardTitleFont, Gdiplus::PointF(rr.X + Scale(hwnd, 28), rr.Y + Scale(hwnd, 8)), &whiteBrush);
+
+            std::string bodySnippet = n->body.empty() ? "Empty note" : n->body.substr(0, 36);
+            std::wstring snippet = L"1d  " + Wide(bodySnippet);
+            g.DrawString(snippet.c_str(), -1, &cardSubFont, Gdiplus::PointF(rr.X + Scale(hwnd, 28), rr.Y + Scale(hwnd, 28)), &mutedTextBrush);
+
+            if (n->archived) {
+                int chipW = Scale(hwnd, 58);
+                int chipH = Scale(hwnd, 16);
+                Gdiplus::RectF chipR(rr.X + rr.Width - chipW - Scale(hwnd, 10), rr.Y + Scale(hwnd, 10), static_cast<float>(chipW), static_cast<float>(chipH));
+                Gdiplus::GraphicsPath chipPath;
+                AddRoundedRectToPath(chipPath, chipR, static_cast<float>(Scale(hwnd, 4)));
+                Gdiplus::SolidBrush chipBg(Gdiplus::Color(255, 40, 42, 48));
+                g.FillPath(&chipBg, &chipPath);
+                g.DrawString(L"ARCHIVED", -1, &chipFont, chipR, &centerSf, &mutedTextBrush);
+            }
+
+            rowY += rowH + Scale(hwnd, 4);
+        }
+
+        // Right Column: Preview Sheet
+        int col3X = col1W + col2W;
+        int col3W = client.right - col3X;
+        auto* selNote = GetNoteById(managerSelectedId);
+
+        if (selNote) {
+            int statY = bodyY + Scale(hwnd, 16);
+            int prevPad = Scale(hwnd, 24);
+
+            COLORREF cSelDot = PaperColors[selNote->color % 8];
+            Gdiplus::SolidBrush sDotB(ToGdiColor(cSelDot));
+            int statDotSize = Scale(hwnd, 8);
+            g.FillEllipse(&sDotB, col3X + prevPad, statY + 2, statDotSize, statDotSize);
+
+            Gdiplus::Font statFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            std::wstring statTag = selNote->archived ? L"ARCHIVED" : L"ACTIVE \x00B7 ON THE DECK";
+            g.DrawString(statTag.c_str(), -1, &statFont, Gdiplus::PointF(static_cast<float>(col3X + prevPad + statDotSize + Scale(hwnd, 8)), static_cast<float>(statY)), &mutedTextBrush);
+
+            struct PrevAction { int id; const wchar_t* icon; };
+            PrevAction prevActs[] = {
+                {CmdPopoutNote, L"\x29C9"},
+                {CmdMarkComplete, L"\x2713"},
+                {CmdToggleDock, L"\x21A6"},
+                {CmdDeleteNote, L"\xD83D\xDDD1"}
+            };
+
+            int pActX = client.right - prevPad - Scale(hwnd, 24);
+            int pActSize = Scale(hwnd, 22);
+            for (int a = 3; a >= 0; --a) {
+                Gdiplus::RectF ar(static_cast<float>(pActX), static_cast<float>(statY - 2), static_cast<float>(pActSize), static_cast<float>(pActSize));
+                g.DrawString(prevActs[a].icon, -1, &sortFont, ar, &centerSf, &mutedTextBrush);
+                pActX -= Scale(hwnd, 28);
+            }
+
+            int sheetY = statY + Scale(hwnd, 28);
+            int sheetW = col3W - prevPad * 2;
+            int sheetH = bodyH - Scale(hwnd, 72);
+
+            Gdiplus::RectF sheetRect(static_cast<float>(col3X + prevPad), static_cast<float>(sheetY), static_cast<float>(sheetW), static_cast<float>(sheetH));
+            Gdiplus::GraphicsPath sheetPath;
+            AddRoundedRectToPath(sheetPath, sheetRect, static_cast<float>(Scale(hwnd, 16)));
+            COLORREF sheetPaperColor = PaperColors[selNote->color % 8];
+            Gdiplus::SolidBrush sheetBg(ToGdiColor(sheetPaperColor));
+            g.FillPath(&sheetBg, &sheetPath);
+
+            COLORREF sheetInkColor = PaperInks[selNote->color % 8];
+            Gdiplus::SolidBrush sheetInk(ToGdiColor(sheetInkColor));
+            Gdiplus::SolidBrush sheetMuted(ToGdiColor(sheetInkColor, 150));
+
+            std::wstring sheetTitle = Wide(selNote->title.empty() ? "Untitled note" : selNote->title);
+            Gdiplus::Font sheetTitleFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 18)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            g.DrawString(sheetTitle.c_str(), -1, &sheetTitleFont, Gdiplus::PointF(sheetRect.X + Scale(hwnd, 20), sheetRect.Y + Scale(hwnd, 18)), &sheetInk);
+
+            Gdiplus::Font editedFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 9)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::RectF edRect(sheetRect.X + sheetRect.Width - Scale(hwnd, 110), sheetRect.Y + Scale(hwnd, 20), static_cast<float>(Scale(hwnd, 90)), static_cast<float>(Scale(hwnd, 20)));
+            Gdiplus::StringFormat rightEdSf;
+            rightEdSf.SetAlignment(Gdiplus::StringAlignmentFar);
+            g.DrawString(L"edited 18m", -1, &editedFont, edRect, &rightEdSf, &sheetMuted);
+
+            std::wstring sheetBody = Wide(selNote->body);
+            Gdiplus::Font handF(L"Excalifont", static_cast<float>(Scale(hwnd, 13)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+            Gdiplus::RectF bodyBound(sheetRect.X + Scale(hwnd, 20), sheetRect.Y + Scale(hwnd, 52), sheetRect.Width - Scale(hwnd, 40), sheetRect.Height - Scale(hwnd, 120));
+            g.DrawString(sheetBody.c_str(), -1, &handF, bodyBound, nullptr, &sheetInk);
+
+            int sRow1Y = sheetRect.Y + sheetRect.Height - Scale(hwnd, 64);
+            int sRow1H = Scale(hwnd, 24);
+            struct FormatBtn { int id; const wchar_t* label; };
+            FormatBtn fbtns[] = {
+                {CmdBoldText, L"B"},
+                {CmdItalicText, L"I"},
+                {CmdStrikeText, L"U"},
+                {CmdStrikeText, L"S"},
+                {0, L"|"},
+                {CmdChecklistText, L"\x2611"},
+                {CmdBulletText, L":="},
+                {CmdNumberedList, L"1="},
+                {0, L"|"},
+                {CmdInsertLink, L"\xD83D\xDD17"},
+                {CmdNormalText, L"Aa"},
+                {CmdMoreMenu, L"\x2026"}
+            };
+
+            int sfX = sheetRect.X + Scale(hwnd, 20);
+            Gdiplus::Font fmtFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+            Gdiplus::Pen divPen(ToGdiColor(sheetInkColor, 40), 1.0f);
+
+            for (const auto& fb : fbtns) {
+                if (fb.id == 0) {
+                    g.DrawLine(&divPen, sfX + Scale(hwnd, 5), sRow1Y + Scale(hwnd, 3), sfX + Scale(hwnd, 5), sRow1Y + sRow1H - Scale(hwnd, 3));
+                    sfX += Scale(hwnd, 12);
+                    continue;
+                }
+                int btnW = Scale(hwnd, 22);
+                Gdiplus::RectF br(static_cast<float>(sfX), static_cast<float>(sRow1Y), static_cast<float>(btnW), static_cast<float>(sRow1H));
+                g.DrawString(fb.label, -1, &fmtFont, br, &centerSf, &sheetInk);
+                sfX += btnW + Scale(hwnd, 3);
+            }
+
+            int sRow2Y = sheetRect.Y + sheetRect.Height - Scale(hwnd, 34);
+            int sRow2H = Scale(hwnd, 24);
+            g.DrawString(L"Created 19 Oct 2026 \x00B7 Updated 18m ago", -1, &editedFont, Gdiplus::PointF(sheetRect.X + Scale(hwnd, 20), static_cast<float>(sRow2Y + 4)), &sheetMuted);
+
+            int swSize = Scale(hwnd, 13);
+            int swX = sheetRect.X + sheetRect.Width - Scale(hwnd, 20) - (swSize + Scale(hwnd, 6)) * 8;
+            int swY = sRow2Y + (sRow2H - swSize) / 2;
+
+            for (int c = 0; c < 8; ++c) {
+                Gdiplus::RectF sr(static_cast<float>(swX), static_cast<float>(swY), static_cast<float>(swSize), static_cast<float>(swSize));
+                Gdiplus::SolidBrush sBrush(ToGdiColor(PaperColors[c]));
+                g.FillEllipse(&sBrush, sr);
+                if ((selNote->color % 8) == static_cast<unsigned>(c)) {
+                    Gdiplus::Pen selPen(ToGdiColor(sheetInkColor), 2.0f);
+                    Gdiplus::RectF ring(sr.X - 2.5f, sr.Y - 2.5f, sr.Width + 5.0f, sr.Height + 5.0f);
+                    g.DrawEllipse(&selPen, ring);
+                }
+                swX += swSize + Scale(hwnd, 6);
+            }
+        }
     }
 
     buffer.end(hdc);
@@ -3070,75 +3431,152 @@ int HitTestManager(HWND hwnd, int x, int y) {
     RECT client;
     GetClientRect(hwnd, &client);
     int pad = Scale(hwnd, 16);
-    int topH = Scale(hwnd, 50);
-    int bodyY = topH + 1;
-    int bodyH = client.bottom - bodyY;
+    int bannerH = Scale(hwnd, 54);
 
-    int col1W = Scale(hwnd, 180);
-    int col2W = Scale(hwnd, 320);
-    int col3W = client.right - col1W - col2W;
+    if (y >= 0 && y <= bannerH) {
+        int btnH = Scale(hwnd, 28);
+        int btnY = (bannerH - btnH) / 2;
+        int buyW = Scale(hwnd, 126);
+        int buyX = client.right - pad - buyW;
+        if (x >= buyX && x <= buyX + buyW && y >= btnY && y <= btnY + btnH) return CmdTrialBuy;
 
-    // Col 1 hit tests
-    if (x >= pad && x <= col1W - pad) {
-        int navY = bodyY + Scale(hwnd, 14);
-        int btnH = Scale(hwnd, 30);
-
-        // [+ New note]
-        if (y >= navY && y <= navY + btnH) return CmdNewNote;
-        navY += btnH + Scale(hwnd, 12);
-
-        // Nav filter items
-        int filterIds[] = {CmdFilterAll, CmdFilterDeck, CmdFilterTasks, CmdFilterNotes, CmdFilterThoughts, CmdFilterArchive};
-        bool isSubs[] = {false, false, true, true, true, false};
-        for (int i = 0; i < 6; ++i) {
-            int rowH = isSubs[i] ? Scale(hwnd, 24) : Scale(hwnd, 28);
-            if (y >= navY && y <= navY + rowH) return filterIds[i];
-            navY += rowH + Scale(hwnd, 2);
-        }
+        int keyW = Scale(hwnd, 90);
+        int keyX = buyX - keyW - Scale(hwnd, 10);
+        if (x >= keyX && x <= keyX + keyW && y >= btnY && y <= btnY + btnH) return CmdTrialEnterKey;
     }
 
-    // Col 2 hit tests (Header buttons & Notes List)
-    if (x >= col1W && x <= col1W + col2W) {
-        int listHeadY = bodyY + Scale(hwnd, 12);
-        int actBtnH = Scale(hwnd, 20);
-        if (y >= listHeadY && y <= listHeadY + actBtnH) {
-            int rightX = col1W + col2W - pad;
-            int backupW = Scale(hwnd, 24);
-            rightX -= backupW;
-            if (x >= rightX && x <= rightX + backupW) return CmdExportBackupJson;
+    int col1W = Scale(hwnd, 190);
+    int bodyY = bannerH;
 
-            int importW = Scale(hwnd, 24);
-            rightX -= (importW + Scale(hwnd, 4));
-            if (x >= rightX && x <= rightX + importW) return CmdImportNotes;
-
-            int sortW = Scale(hwnd, 58);
-            rightX -= (sortW + Scale(hwnd, 6));
-            if (x >= rightX && x <= rightX + sortW) return CmdSortOrder;
+    if (x >= 0 && x <= col1W) {
+        int navY = bodyY + Scale(hwnd, 36);
+        int navH = Scale(hwnd, 32);
+        int navCmds[] = {CmdNavNotes, CmdNavDeck, CmdNavArchive};
+        for (int i = 0; i < 3; ++i) {
+            if (y >= navY && y <= navY + navH) return navCmds[i];
+            navY += navH + Scale(hwnd, 4);
         }
 
-        int itemY = bodyY + Scale(hwnd, 72);
-        int itemH = Scale(hwnd, 64);
-        for (std::size_t i = 0; i < managerRows.size(); ++i) {
-            if (y >= itemY && y <= itemY + itemH) {
-                return 1000 + static_cast<int>(i); // List row index
+        int botY = client.bottom - Scale(hwnd, 120);
+        if (y >= botY && y <= botY + navH) return CmdNavSettings;
+        botY += navH + Scale(hwnd, 4);
+        if (y >= botY && y <= botY + navH) return CmdNavAbout;
+        botY += navH + Scale(hwnd, 6);
+        if (y >= botY && y <= client.bottom) return CmdNavSignIn;
+    }
+
+    if (managerNavSection == 1) {
+        int setX = col1W + Scale(hwnd, 28);
+        int setContentW = client.right - col1W - Scale(hwnd, 56);
+        int curSetY = bodyY + Scale(hwnd, 78);
+
+        int card1H = Scale(hwnd, 126);
+        int r1Y = curSetY + Scale(hwnd, 14);
+        int tPillW = Scale(hwnd, 52);
+        int tPillH = Scale(hwnd, 24);
+        int pillStartX = setX + setContentW - Scale(hwnd, 16) - tPillW * 3;
+        if (y >= r1Y + 4 && y <= r1Y + 4 + tPillH) {
+            for (int p = 0; p < 3; ++p) {
+                if (x >= pillStartX + p * tPillW && x <= pillStartX + (p + 1) * tPillW) {
+                    return CmdThemeAuto + p;
+                }
             }
-            itemY += itemH + Scale(hwnd, 4);
+        }
+
+        int r2Y = curSetY + Scale(hwnd, 68);
+        int fPillW = Scale(hwnd, 76);
+        int fPillStartX = setX + setContentW - Scale(hwnd, 16) - fPillW * 4;
+        if (y >= r2Y + 4 && y <= r2Y + 4 + tPillH) {
+            for (int p = 0; p < 4; ++p) {
+                if (x >= fPillStartX + p * fPillW && x <= fPillStartX + (p + 1) * fPillW) {
+                    return CmdFontHandwritten + p;
+                }
+            }
+        }
+
+        curSetY += card1H + Scale(hwnd, 42);
+        int card2H = Scale(hwnd, 126);
+        int d1Y = curSetY + Scale(hwnd, 14);
+        int ePillW = Scale(hwnd, 52);
+        int ePillStartX = setX + setContentW - Scale(hwnd, 16) - ePillW * 2;
+        if (y >= d1Y + 4 && y <= d1Y + 4 + tPillH) {
+            if (x >= ePillStartX && x <= ePillStartX + ePillW) return CmdEdgeLeft;
+            if (x >= ePillStartX + ePillW && x <= ePillStartX + ePillW * 2) return CmdEdgeRight;
+        }
+
+        int d2Y = curSetY + Scale(hwnd, 68);
+        int swW = Scale(hwnd, 40);
+        int swH = Scale(hwnd, 20);
+        int swX = setX + setContentW - Scale(hwnd, 16) - swW;
+        if (x >= swX && x <= swX + swW && y >= d2Y + 6 && y <= d2Y + 6 + swH) {
+            return CmdToggleFullscreenHide;
+        }
+
+        curSetY += card2H + Scale(hwnd, 42);
+        int s1Y = curSetY + Scale(hwnd, 14);
+        int sw3X = setX + setContentW - Scale(hwnd, 16) - swW;
+        if (x >= sw3X && x <= sw3X + swW && y >= s1Y + 6 && y <= s1Y + 6 + swH) {
+            return CmdToggleStartWithWindows;
         }
     }
 
-    // Col 3 hit tests (Open note button)
-    if (x > col1W + col2W) {
-        int col3X = col1W + col2W;
-        int prevPad = Scale(hwnd, 20);
-        int sheetY = bodyY + Scale(hwnd, 42);
-        int sheetW = col3W - prevPad * 2;
-        int sheetH = bodyH - Scale(hwnd, 80);
-        int btnX = col3X + prevPad + sheetW - Scale(hwnd, 110);
-        int btnY = sheetY + sheetH - Scale(hwnd, 38);
-        int btnW = Scale(hwnd, 96);
-        int btnH = Scale(hwnd, 26);
-        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
-            return 2000; // Open note
+    if (managerNavSection == 0) {
+        int col2W = Scale(hwnd, 330);
+        int col2X = col1W;
+
+        if (x >= col2X && x <= col2X + col2W) {
+            int topRowY = bodyY + Scale(hwnd, 14);
+            int sortBtnX = col2X + col2W - Scale(hwnd, 72);
+            int sortBtnSize = Scale(hwnd, 28);
+            if (x >= sortBtnX && x <= sortBtnX + sortBtnSize && y >= topRowY && y <= topRowY + sortBtnSize) {
+                return CmdSortOrder;
+            }
+
+            int addBtnX = col2X + col2W - Scale(hwnd, 36);
+            if (x >= addBtnX && x <= addBtnX + sortBtnSize && y >= topRowY && y <= topRowY + sortBtnSize) {
+                return CmdNewNote;
+            }
+
+            int rowY = bodyY + Scale(hwnd, 86);
+            int rowH = Scale(hwnd, 52);
+            for (std::size_t i = 0; i < managerRows.size(); ++i) {
+                if (y >= rowY && y <= rowY + rowH) {
+                    return 1000 + static_cast<int>(i);
+                }
+                rowY += rowH + Scale(hwnd, 4);
+            }
+        }
+
+        if (x > col2X + col2W) {
+            int statY = bodyY + Scale(hwnd, 16);
+            int prevPad = Scale(hwnd, 24);
+            int pActX = client.right - prevPad - Scale(hwnd, 24);
+            int pActSize = Scale(hwnd, 22);
+            int prevActs[] = {CmdDeleteNote, CmdToggleDock, CmdMarkComplete, CmdPopoutNote};
+            for (int a = 0; a < 4; ++a) {
+                if (x >= pActX && x <= pActX + pActSize && y >= statY - 4 && y <= statY + pActSize + 4) {
+                    return prevActs[a];
+                }
+                pActX -= Scale(hwnd, 28);
+            }
+
+            auto* selNote = GetNoteById(managerSelectedId);
+            if (selNote) {
+                int sheetW = client.right - (col1W + col2W) - prevPad * 2;
+                int sheetH = (client.bottom - bodyY) - Scale(hwnd, 72);
+                int sheetY = statY + Scale(hwnd, 28);
+                int sRow2Y = sheetY + sheetH - Scale(hwnd, 34);
+                int swSize = Scale(hwnd, 13);
+                int swX = (col1W + col2W + prevPad) + sheetW - Scale(hwnd, 20) - (swSize + Scale(hwnd, 6)) * 8;
+                if (y >= sRow2Y - 2 && y <= sRow2Y + Scale(hwnd, 24)) {
+                    for (int c = 0; c < 8; ++c) {
+                        if (x >= swX - 3 && x <= swX + swSize + 3) {
+                            return CmdColorBase + c;
+                        }
+                        swX += swSize + Scale(hwnd, 6);
+                    }
+                }
+            }
         }
     }
 
@@ -3148,30 +3586,31 @@ int HitTestManager(HWND hwnd, int x, int y) {
 LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_CREATE: {
-            int col1W = Scale(hwnd, 180);
-            int col2W = Scale(hwnd, 320);
+            int col1W = Scale(hwnd, 190);
             int pad = Scale(hwnd, 12);
-            int sbY = Scale(hwnd, 50) + Scale(hwnd, 38);
-            int sbH = Scale(hwnd, 26);
+            int sbY = Scale(hwnd, 54) + Scale(hwnd, 14);
+            int sbW = Scale(hwnd, 220);
+            int sbH = Scale(hwnd, 28);
             searchBoxHwnd = CreateWindowExW(
                 0, L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | WS_BORDER,
-                col1W + pad, sbY, col2W - pad * 2, sbH,
+                col1W + pad, sbY, sbW, sbH,
                 hwnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(4)), appInstance, nullptr);
-            SendMessageW(searchBoxHwnd, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Find a thought\x2026"));
+            SendMessageW(searchBoxHwnd, EM_SETCUEBANNER, TRUE, reinterpret_cast<LPARAM>(L"Search"));
             SendMessageW(searchBoxHwnd, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont), TRUE);
             SetWindowTheme(searchBoxHwnd, L"DarkMode_Explorer", nullptr);
             return 0;
         }
 
         case WM_SIZE: {
-            int col1W = Scale(hwnd, 180);
-            int col2W = Scale(hwnd, 320);
+            int col1W = Scale(hwnd, 190);
             int pad = Scale(hwnd, 12);
-            int sbY = Scale(hwnd, 50) + Scale(hwnd, 38);
-            int sbH = Scale(hwnd, 26);
+            int sbY = Scale(hwnd, 54) + Scale(hwnd, 14);
+            int sbW = Scale(hwnd, 220);
+            int sbH = Scale(hwnd, 28);
             if (searchBoxHwnd) {
-                SetWindowPos(searchBoxHwnd, nullptr, col1W + pad, sbY, col2W - pad * 2, sbH, SWP_NOZORDER | SWP_NOACTIVATE);
+                SetWindowPos(searchBoxHwnd, nullptr, col1W + pad, sbY, sbW, sbH, SWP_NOZORDER | SWP_NOACTIVATE);
+                ShowWindow(searchBoxHwnd, (managerNavSection == 0) ? SW_SHOW : SW_HIDE);
             }
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
@@ -3237,17 +3676,44 @@ LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 ExecuteCommand(CmdNewNote);
                 return 0;
             }
-            if (hit == CmdFilterAll || hit == CmdFilterDeck || hit == CmdFilterTasks || hit == CmdFilterNotes || hit == CmdFilterThoughts || hit == CmdFilterArchive) {
-                managerFilter = hit;
+            if (hit == CmdNavNotes) {
+                managerNavSection = 0;
+                managerFilter = CmdFilterAll;
                 RefreshManagerList();
+                if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_SHOW);
+                InvalidateRect(hwnd, nullptr, TRUE);
                 return 0;
             }
-            if (hit == CmdImportNotes) {
-                ImportNotesFromFile();
+            if (hit == CmdNavDeck) {
+                managerNavSection = 0;
+                managerFilter = CmdFilterDeck;
+                RefreshManagerList();
+                if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_SHOW);
+                InvalidateRect(hwnd, nullptr, TRUE);
                 return 0;
             }
-            if (hit == CmdExportBackupJson) {
-                ExportBackupJson();
+            if (hit == CmdNavArchive) {
+                managerNavSection = 0;
+                managerFilter = CmdFilterArchive;
+                RefreshManagerList();
+                if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_SHOW);
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
+            if (hit == CmdNavSettings) {
+                managerNavSection = 1;
+                if (searchBoxHwnd) ShowWindow(searchBoxHwnd, SW_HIDE);
+                InvalidateRect(hwnd, nullptr, TRUE);
+                return 0;
+            }
+            if (hit == CmdNavAbout || hit == CmdNavSignIn || hit == CmdTrialEnterKey || hit == CmdTrialBuy ||
+                hit == CmdPopoutNote || hit == CmdMarkComplete || hit == CmdToggleDock || hit == CmdDeleteNote ||
+                (hit >= CmdThemeAuto && hit <= CmdThemeDark) ||
+                (hit >= CmdFontHandwritten && hit <= CmdFontTypewriter) ||
+                hit == CmdEdgeLeft || hit == CmdEdgeRight ||
+                hit == CmdToggleFullscreenHide || hit == CmdToggleStartWithWindows ||
+                (hit >= CmdColorBase && hit < CmdColorBase + 8)) {
+                ExecuteCommand(hit);
                 return 0;
             }
             if (hit == CmdSortOrder) {
@@ -3267,14 +3733,6 @@ LRESULT CALLBACK ManagerWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 if (idx < managerRows.size()) {
                     managerSelectedId = managerRows[idx];
                     InvalidateRect(hwnd, nullptr, TRUE);
-                }
-                return 0;
-            }
-            if (hit == 2000) {
-                if (managerSelectedId != 0) {
-                    activeId = managerSelectedId;
-                    ShowWindow(hwnd, SW_HIDE);
-                    SetAppState(AppState::Editing);
                 }
                 return 0;
             }
@@ -3356,11 +3814,17 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     InitCommonControlsEx(&icex);
 
     // 4. Create typography fonts
+    std::wstring exeDir = GetExeDir();
+    std::wstring fontPath = exeDir + L"\\excalifont-regular.ttf";
+    if (GetFileAttributesW(fontPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        AddFontResourceExW(fontPath.c_str(), FR_PRIVATE, 0);
+    }
+
     uiFont = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     uiBoldFont = CreateFontW(-13, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
     titleFont = CreateFontW(-24, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
-    handFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe Print");
-    handPreviewFont = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe Print");
+    handFont = CreateFontW(-20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Excalifont");
+    handPreviewFont = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Excalifont");
     monoFont = CreateFontW(-13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Consolas");
 
     // 5. App Data Paths & Storage
