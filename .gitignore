@@ -42,4 +42,5 @@ native/windows/build/
 compile_commands.json
 native/windows/.clangd
 native/windows/compile_commands.json
+extracted_peekynotes/
 

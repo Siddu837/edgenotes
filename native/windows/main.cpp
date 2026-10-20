@@ -105,6 +105,7 @@ HWND dockHwnd = nullptr;
 HWND peekHwnd = nullptr;
 HWND editorHwnd = nullptr;
 HWND managerHwnd = nullptr;
+HWND undoHwnd = nullptr;
 HWND titleBoxHwnd = nullptr;
 HWND richEditHwnd = nullptr;
 HWND statusBoxHwnd = nullptr;
@@ -261,46 +262,42 @@ Note* GetNoteById(std::uint64_t id) {
 std::vector<Note*> GetDeckNotes() {
     std::vector<Note*> result;
     for (auto& n : store.notes) {
-        if (!n.archived) {
+        if (!n.archived && n.isInDeck) {
             result.push_back(&n);
             if (result.size() >= 5) break;
+        }
+    }
+    if (result.empty()) {
+        for (auto& n : store.notes) {
+            if (!n.archived) {
+                result.push_back(&n);
+                if (result.size() >= 5) break;
+            }
         }
     }
     return result;
 }
 
 std::vector<Note*> GetNotesForActiveDeck() {
-    std::vector<Note*> result;
-    for (auto& n : store.notes) {
-        if (activeDeck == 3) { // Archive
-            if (n.archived) result.push_back(&n);
-        } else {
-            if (!n.archived) {
-                int mapped = 0;
-                if (n.color == 1) mapped = 1;       // Sky -> Notes
-                else if (n.color == 4) mapped = 2;   // Rose -> Thoughts
-                else mapped = 0;                      // Everything else -> Tasks
-                if (mapped == activeDeck) result.push_back(&n);
-            }
-        }
-    }
-    if (result.empty() && activeDeck == 0) {
-        for (auto& n : store.notes) {
-            if (!n.archived) result.push_back(&n);
-        }
-    }
-    return result;
+    return GetDeckNotes();
 }
+
 
 bool AtomicWriteFile(const std::wstring& path, const std::string& data) {
     auto temp = path + L".tmp";
+    auto bak = path + L".bak";
     HANDLE h = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     DWORD written = 0;
     bool ok = WriteFile(h, data.data(), static_cast<DWORD>(data.size()), &written, nullptr) && (written == data.size());
     if (ok) ok = FlushFileBuffers(h) != 0;
     CloseHandle(h);
-    if (ok) ok = MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    if (ok) {
+        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            CopyFileW(path.c_str(), bak.c_str(), FALSE);
+        }
+        ok = MoveFileExW(temp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+    }
     if (!ok) DeleteFileW(temp.c_str());
     return ok;
 }
@@ -312,10 +309,18 @@ void RefreshManagerList();
 void SaveEditorContent();
 void LoadActiveNoteIntoEditor();
 void ExecuteCommand(int id);
+void ShowUndoToast();
+void PaintUndoToast(HWND hwnd);
+LRESULT CALLBACK UndoWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
 void PersistStore() {
     try {
         isSaveFailed = !AtomicWriteFile(storagePath, edgenotes::encode(store.notes));
+        std::wstring jsonPath = storagePath;
+        size_t dotPos = jsonPath.rfind(L'.');
+        if (dotPos != std::wstring::npos) jsonPath = jsonPath.substr(0, dotPos) + L".json";
+        else jsonPath += L".json";
+        AtomicWriteFile(jsonPath, edgenotes::encodeJson(store.notes));
     } catch (...) {
         isSaveFailed = true;
     }
@@ -366,7 +371,10 @@ void SaveEditorContent() {
     if (isLoadingEditor) return;
     auto* n = GetActiveNote();
     if (!n) return;
-    n->title = Utf8(GetWindowTextString(titleBoxHwnd));
+    std::string newTitle = Utf8(GetWindowTextString(titleBoxHwnd));
+    bool titleChanged = (n->title != newTitle);
+    n->title = newTitle;
+    n->displayTitle = newTitle;
     n->body = Utf8(GetWindowTextString(richEditHwnd));
     RtfStream stream;
     EDITSTREAM es{};
@@ -377,6 +385,9 @@ void SaveEditorContent() {
         n->rtf = std::move(stream.bytes);
     }
     PersistStore();
+    if (titleChanged && dockHwnd) {
+        InvalidateRect(dockHwnd, nullptr, TRUE);
+    }
 }
 
 void LoadActiveNoteIntoEditor() {
@@ -437,8 +448,10 @@ void UpdateDockGeometry() {
     int iconBtnSize = Scale(dockHwnd, 30);
     int iconGap = Scale(dockHwnd, 6);
 
-    // Grip + 4 deck tabs + gap + [+] + [theme] + [pin] + [settings] + margins
-    int totalLen = gripSize + gap + (4 * (pillLen + gap)) + Scale(dockHwnd, 10) + (4 * (iconBtnSize + iconGap)) + Scale(dockHwnd, 12);
+    auto deckNotes = GetDeckNotes();
+    int noteCount = static_cast<int>(deckNotes.size());
+    // Grip + note tabs + gap + [+] + [theme] + [pin] + [settings] + margins
+    int totalLen = gripSize + gap + (noteCount * (pillLen + gap)) + Scale(dockHwnd, 10) + (4 * (iconBtnSize + iconGap)) + Scale(dockHwnd, 12);
 
     int x = 0, y = 0, w = 0, h = 0;
     if (isVertical) {
@@ -942,12 +955,17 @@ void ExecuteCommand(int id) {
         case CmdNewNote: {
             Note note;
             note.id = nextId++;
-            note.color = (activeDeck == 0 ? 0 : activeDeck == 1 ? 1 : activeDeck == 2 ? 4 : 2);
-            note.archived = (activeDeck == 3);
+            note.color = (activeColorSwatch + 1) % 8;
+            activeColorSwatch = note.color;
+            note.archived = false;
             note.title = "Untitled note";
+            note.railLabel = "U";
+            note.displayTitle = "Untitled note";
+            note.isInDeck = true;
             activeId = note.id;
             store.notes.push_back(note);
             PersistStore();
+            UpdateDockGeometry();
             SetAppState(AppState::Editing);
             SetFocus(titleBoxHwnd);
             SendMessageW(titleBoxHwnd, EM_SETSEL, 0, -1);
@@ -974,8 +992,10 @@ void ExecuteCommand(int id) {
                 store.erase(n->id, GetTickCount64());
                 activeId = 0;
                 PersistStore();
+                UpdateDockGeometry();
                 RefreshManagerList();
                 SetAppState(AppState::Collapsed);
+                ShowUndoToast();
             }
             break;
         }
@@ -985,9 +1005,14 @@ void ExecuteCommand(int id) {
                 if (store.undo(GetTickCount64())) {
                     activeId = idToRestore;
                     PersistStore();
+                    UpdateDockGeometry();
                     RefreshManagerList();
                     SetAppState(AppState::Editing);
                 }
+            }
+            if (undoHwnd && IsWindowVisible(undoHwnd)) {
+                KillTimer(undoHwnd, 1);
+                ShowWindow(undoHwnd, SW_HIDE);
             }
             break;
         }
@@ -996,6 +1021,7 @@ void ExecuteCommand(int id) {
                 n->color = (n->color + 1) % 8;
                 PersistStore();
                 LoadActiveNoteIntoEditor();
+                if (dockHwnd) InvalidateRect(dockHwnd, nullptr, TRUE);
             }
             break;
         }
@@ -1301,8 +1327,160 @@ void ExecuteCommand(int id) {
     }
 }
 
+void ShowUndoToast() {
+    if (!undoHwnd || !store.deleted) return;
+    RECT work = GetDockWorkArea();
+    int toastW = Scale(undoHwnd, 310);
+    int toastH = Scale(undoHwnd, 44);
+    int x = work.left + (work.right - work.left - toastW) / 2;
+    int y = work.bottom - toastH - Scale(undoHwnd, 28);
+    SetWindowPos(undoHwnd, HWND_TOPMOST, x, y, toastW, toastH, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SetTimer(undoHwnd, 1, 60, nullptr);
+    InvalidateRect(undoHwnd, nullptr, TRUE);
+}
+
+void PaintUndoToast(HWND hwnd) {
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(hwnd, &ps);
+    RECT client;
+    GetClientRect(hwnd, &client);
+
+    DoubleBuffer buffer;
+    buffer.begin(hdc, client.right, client.bottom);
+    Gdiplus::Graphics g(buffer.hdcMem);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+
+    // Rounded toast pill background
+    Gdiplus::RectF toastRect(0.0f, 0.0f, static_cast<float>(client.right), static_cast<float>(client.bottom));
+    Gdiplus::GraphicsPath bgPath;
+    AddRoundedRectToPath(bgPath, toastRect, static_cast<float>(Scale(hwnd, 8)));
+    Gdiplus::SolidBrush bgBrush(ToGdiColor(NightPanel));
+    g.FillPath(&bgBrush, &bgPath);
+    Gdiplus::Pen borderPen(ToGdiColor(NightBorder), 1.0f);
+    g.DrawPath(&borderPen, &bgPath);
+
+    // Draining countdown bar at the bottom edge
+    uint64_t now = GetTickCount64();
+    float progress = 0.0f;
+    if (store.deleted && store.deleted->expires > now) {
+        progress = static_cast<float>(store.deleted->expires - now) / 10000.0f;
+    }
+    progress = Clamp(progress, 0.0f, 1.0f);
+    float barW = static_cast<float>(client.right) * progress;
+    if (barW > 0.0f) {
+        Gdiplus::RectF barRect(0.0f, static_cast<float>(client.bottom - Scale(hwnd, 3)), barW, static_cast<float>(Scale(hwnd, 3)));
+        Gdiplus::SolidBrush barBrush(ToGdiColor(PaperColors[0])); // Mint
+        g.FillRectangle(&barBrush, barRect);
+    }
+
+    // Text on left
+    Gdiplus::Font textFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 12)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    Gdiplus::SolidBrush textBrush(ToGdiColor(NightInk));
+    std::wstring noteDeleted = L"Deleted note";
+    if (store.deleted) {
+        std::wstring deletedTitle = Wide(store.deleted->note.title.empty() ? "Untitled note" : store.deleted->note.title);
+        if (deletedTitle.size() > 16) deletedTitle = deletedTitle.substr(0, 15) + L"\x2026";
+        noteDeleted = L"Deleted \x201C" + deletedTitle + L"\x201D";
+    }
+    g.DrawString(noteDeleted.c_str(), -1, &textFont, Gdiplus::PointF(static_cast<float>(Scale(hwnd, 14)), static_cast<float>(Scale(hwnd, 13))), &textBrush);
+
+    // Undo button on right
+    int btnW = Scale(hwnd, 95);
+    int btnH = Scale(hwnd, 26);
+    Gdiplus::RectF btnRect(static_cast<float>(client.right - btnW - Scale(hwnd, 10)), static_cast<float>(Scale(hwnd, 9)), static_cast<float>(btnW), static_cast<float>(btnH));
+    Gdiplus::GraphicsPath btnPath;
+    AddRoundedRectToPath(btnPath, btnRect, static_cast<float>(Scale(hwnd, 5)));
+    Gdiplus::SolidBrush btnBg(ToGdiColor(NightSurface));
+    g.FillPath(&btnBg, &btnPath);
+    Gdiplus::Pen btnPen(ToGdiColor(PaperColors[0]), 1.0f);
+    g.DrawPath(&btnPen, &btnPath);
+
+    Gdiplus::Font btnFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::SolidBrush btnText(ToGdiColor(PaperColors[0]));
+    Gdiplus::StringFormat csf;
+    csf.SetAlignment(Gdiplus::StringAlignmentCenter);
+    csf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+    g.DrawString(L"Undo (Ctrl+Z)", -1, &btnFont, btnRect, &csf, &btnText);
+
+    buffer.end(hdc);
+    EndPaint(hwnd, &ps);
+}
+
+LRESULT CALLBACK UndoWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_PAINT:
+            PaintUndoToast(hwnd);
+            return 0;
+
+        case WM_TIMER: {
+            uint64_t now = GetTickCount64();
+            if (!store.deleted || now >= store.deleted->expires) {
+                KillTimer(hwnd, 1);
+                ShowWindow(hwnd, SW_HIDE);
+                store.deleted.reset();
+            } else {
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+            return 0;
+        }
+
+        case WM_LBUTTONUP: {
+            int x = GET_X_LPARAM(lp);
+            RECT client;
+            GetClientRect(hwnd, &client);
+            int btnW = Scale(hwnd, 95);
+            if (x >= client.right - btnW - Scale(hwnd, 10)) {
+                KillTimer(hwnd, 1);
+                ShowWindow(hwnd, SW_HIDE);
+                ExecuteCommand(CmdUndoDelete);
+            }
+            return 0;
+        }
+
+        case WM_KEYDOWN:
+            if (wp == 'Z' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                KillTimer(hwnd, 1);
+                ShowWindow(hwnd, SW_HIDE);
+                ExecuteCommand(CmdUndoDelete);
+                return 0;
+            }
+            if (wp == VK_ESCAPE) {
+                KillTimer(hwnd, 1);
+                ShowWindow(hwnd, SW_HIDE);
+                return 0;
+            }
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
 // Subclass procedure for titleBox and richEdit controls
 LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR) {
+    if (msg == WM_LBUTTONUP && hwnd == richEditHwnd) {
+        POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+        POINTL ptl{pt.x, pt.y};
+        int charIdx = static_cast<int>(SendMessageW(hwnd, EM_CHARFROMPOS, 0, reinterpret_cast<LPARAM>(&ptl)));
+        if (charIdx >= 0) {
+            wchar_t ch[2]{};
+            TEXTRANGEW tr{{charIdx, charIdx + 1}, ch};
+            SendMessageW(hwnd, EM_GETTEXTRANGE, 0, reinterpret_cast<LPARAM>(&tr));
+            if (ch[0] == 0x2610) { // ☐ -> ☑
+                CHARRANGE sel{charIdx, charIdx + 1};
+                SendMessageW(hwnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&sel));
+                SendMessageW(hwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"\x2611"));
+                SaveEditorContent();
+                return 0;
+            } else if (ch[0] == 0x2611) { // ☑ -> ☐
+                CHARRANGE sel{charIdx, charIdx + 1};
+                SendMessageW(hwnd, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&sel));
+                SendMessageW(hwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"\x2610"));
+                SaveEditorContent();
+                return 0;
+            }
+        }
+    }
+
     if (msg == WM_KEYDOWN) {
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -1383,19 +1561,21 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
         return res;
     }
 
-    // Auto-formatting triggers: "# ", "## ", "### ", "- ", "* ", "[] ", "1. "
+    // Auto-formatting triggers: "# ", "## ", "### ", "- ", "* ", "1. ", "[] ", "[ ] ", "[x] ", "[X] "
     if (msg == WM_CHAR && wp == ' ' && hwnd == richEditHwnd) {
         CHARRANGE selection{};
         SendMessageW(hwnd, EM_EXGETSEL, 0, reinterpret_cast<LPARAM>(&selection));
         LONG line = static_cast<LONG>(SendMessageW(hwnd, EM_LINEFROMCHAR, selection.cpMin, 0));
         LONG start = static_cast<LONG>(SendMessageW(hwnd, EM_LINEINDEX, line, 0));
         LONG len = selection.cpMin - start;
-        if (selection.cpMin == selection.cpMax && len > 0 && len <= 3) {
-            wchar_t buf[8]{};
+        if (selection.cpMin == selection.cpMax && len > 0 && len <= 4) {
+            wchar_t buf[16]{};
             TEXTRANGEW range{{start, selection.cpMin}, buf};
             SendMessageW(hwnd, EM_GETTEXTRANGE, 0, reinterpret_cast<LPARAM>(&range));
             std::wstring trigger(buf);
-            if (trigger == L"#" || trigger == L"##" || trigger == L"###" || trigger == L"-" || trigger == L"*" || trigger == L"[]" || trigger == L"1.") {
+            if (trigger == L"#" || trigger == L"##" || trigger == L"###" ||
+                trigger == L"-" || trigger == L"*" || trigger == L"1." ||
+                trigger == L"[]" || trigger == L"[ ]" || trigger == L"[x]" || trigger == L"[X]") {
                 lastAutoFormatPrefix = trigger;
                 lastAutoFormatLine = line;
                 isLoadingEditor = true;
@@ -1406,10 +1586,14 @@ LRESULT CALLBACK EditSubclassProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, UIN
 
                 if (trigger == L"-" || trigger == L"*") {
                     ExecuteCommand(CmdBulletText);
-                } else if (trigger == L"[]") {
-                    ExecuteCommand(CmdChecklistText);
                 } else if (trigger == L"1.") {
                     ExecuteCommand(CmdNumberedList);
+                } else if (trigger == L"[]" || trigger == L"[ ]") {
+                    SendMessageW(hwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"\x2610 "));
+                    SaveEditorContent();
+                } else if (trigger == L"[x]" || trigger == L"[X]") {
+                    SendMessageW(hwnd, EM_REPLACESEL, TRUE, reinterpret_cast<LPARAM>(L"\x2611 "));
+                    SaveEditorContent();
                 } else {
                     CHARFORMAT2W fmt{};
                     fmt.cbSize = sizeof(fmt);
@@ -1466,13 +1650,11 @@ void PaintDock(HWND hwnd) {
 
     int currentPos = gripSize + gap;
 
-    // 2. The 5 Deck Tabs: WORK, PERSONAL, SCRATCHPAD, IDEAS, ARCHIVE
-    for (int i = 0; i < 4; ++i) {
-        bool isHovered = (hoveredTabIndex == i);
-        bool isActive = (activeDeck == i && (appState == AppState::Peek || appState == AppState::Editing));
-
-        int hoverOffset = isHovered ? Scale(hwnd, 8) : (isActive ? Scale(hwnd, 4) : 0);
-
+    // 2. Active Note Tabs (Pill tabs displaying effectiveRailLabel in pastel note colors)
+    auto deckNotes = GetDeckNotes();
+    if (deckNotes.empty()) {
+        bool isHovered = (hoveredTabIndex == 0);
+        int hoverOffset = isHovered ? Scale(hwnd, 8) : 0;
         Gdiplus::RectF tabRect;
         if (isVertical) {
             float x = (config.side == DockSide::Right) ? static_cast<float>(-hoverOffset) : 0.0f;
@@ -1481,44 +1663,74 @@ void PaintDock(HWND hwnd) {
             float y = (config.side == DockSide::Bottom) ? static_cast<float>(-hoverOffset) : 0.0f;
             tabRect = Gdiplus::RectF(static_cast<float>(currentPos), y, static_cast<float>(pillLen), static_cast<float>(pillThick + hoverOffset));
         }
-
-        // Pill shape with rounded corners on inner side
         Gdiplus::GraphicsPath path;
         AddTabPillToPath(path, tabRect, config.side, static_cast<float>(Scale(hwnd, 8)));
-
-        COLORREF colorVal = DeckList[i].color;
-        Gdiplus::SolidBrush tabBrush(ToGdiColor(colorVal));
+        Gdiplus::SolidBrush tabBrush(ToGdiColor(PaperColors[0]));
         g.FillPath(&tabBrush, &path);
-
         Gdiplus::Pen borderPen(Gdiplus::Color(45, 0, 0, 0), 1.0f);
         g.DrawPath(&borderPen, &path);
 
-        // Deck label: uppercase bold
-        std::wstring titleText = std::wstring(DeckList[i].symbol) + L" " + DeckList[i].name;
         Gdiplus::SolidBrush textBrush(ToGdiColor(PaperInk));
-        Gdiplus::Font font(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
-
+        Gdiplus::Font font(L"Segoe UI", static_cast<float>(Scale(hwnd, 12)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
         Gdiplus::StringFormat sf;
         sf.SetAlignment(Gdiplus::StringAlignmentCenter);
         sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-        sf.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
-        sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-
-        if (isVertical) {
-            Gdiplus::GraphicsState gState = g.Save();
-            float cx = tabRect.X + tabRect.Width / 2.0f;
-            float cy = tabRect.Y + tabRect.Height / 2.0f;
-            g.TranslateTransform(cx, cy);
-            g.RotateTransform(config.side == DockSide::Right ? 270.0f : 90.0f);
-
-            Gdiplus::RectF textBound(-tabRect.Height / 2.0f, -tabRect.Width / 2.0f, tabRect.Height, tabRect.Width);
-            g.DrawString(titleText.c_str(), -1, &font, textBound, &sf, &textBrush);
-            g.Restore(gState);
-        } else {
-            g.DrawString(titleText.c_str(), -1, &font, tabRect, &sf, &textBrush);
-        }
-
+        g.DrawString(L"N", -1, &font, tabRect, &sf, &textBrush);
         currentPos += pillLen + gap;
+    } else {
+        for (std::size_t i = 0; i < deckNotes.size(); ++i) {
+            const auto* note = deckNotes[i];
+            bool isHovered = (hoveredTabIndex == static_cast<int>(i));
+            bool isActive = (activeId == note->id && (appState == AppState::Editing || appState == AppState::Peek));
+
+            int hoverOffset = isHovered ? Scale(hwnd, 8) : (isActive ? Scale(hwnd, 4) : 0);
+
+            Gdiplus::RectF tabRect;
+            if (isVertical) {
+                float x = (config.side == DockSide::Right) ? static_cast<float>(-hoverOffset) : 0.0f;
+                tabRect = Gdiplus::RectF(x, static_cast<float>(currentPos), static_cast<float>(pillThick + hoverOffset), static_cast<float>(pillLen));
+            } else {
+                float y = (config.side == DockSide::Bottom) ? static_cast<float>(-hoverOffset) : 0.0f;
+                tabRect = Gdiplus::RectF(static_cast<float>(currentPos), y, static_cast<float>(pillLen), static_cast<float>(pillThick + hoverOffset));
+            }
+
+            // Pill shape with rounded corners on inner side
+            Gdiplus::GraphicsPath path;
+            AddTabPillToPath(path, tabRect, config.side, static_cast<float>(Scale(hwnd, 8)));
+
+            COLORREF colorVal = PaperColors[note->color % 8];
+            Gdiplus::SolidBrush tabBrush(ToGdiColor(colorVal));
+            g.FillPath(&tabBrush, &path);
+
+            Gdiplus::Pen borderPen(Gdiplus::Color(45, 0, 0, 0), 1.0f);
+            g.DrawPath(&borderPen, &path);
+
+            std::wstring labelText = Wide(note->effectiveRailLabel());
+            Gdiplus::SolidBrush textBrush(ToGdiColor(PaperInk));
+            Gdiplus::Font font(L"Segoe UI", static_cast<float>(Scale(hwnd, 12)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+
+            Gdiplus::StringFormat sf;
+            sf.SetAlignment(Gdiplus::StringAlignmentCenter);
+            sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+            sf.SetTrimming(Gdiplus::StringTrimmingEllipsisCharacter);
+            sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+
+            if (isVertical) {
+                Gdiplus::GraphicsState gState = g.Save();
+                float cx = tabRect.X + tabRect.Width / 2.0f;
+                float cy = tabRect.Y + tabRect.Height / 2.0f;
+                g.TranslateTransform(cx, cy);
+                g.RotateTransform(config.side == DockSide::Right ? 270.0f : 90.0f);
+
+                Gdiplus::RectF textBound(-tabRect.Height / 2.0f, -tabRect.Width / 2.0f, tabRect.Height, tabRect.Width);
+                g.DrawString(labelText.c_str(), -1, &font, textBound, &sf, &textBrush);
+                g.Restore(gState);
+            } else {
+                g.DrawString(labelText.c_str(), -1, &font, tabRect, &sf, &textBrush);
+            }
+
+            currentPos += pillLen + gap;
+        }
     }
 
     currentPos += Scale(hwnd, 10);
@@ -1621,10 +1833,12 @@ int HitTestDock(HWND hwnd, int x, int y) {
 
     if (pos < gripSize) return -2; // Grip
 
+    auto deckNotes = GetDeckNotes();
+    int tabCount = deckNotes.empty() ? 1 : static_cast<int>(deckNotes.size());
     int current = gripSize + gap;
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < tabCount; ++i) {
         if (pos >= current && pos < current + pillLen) {
-            return i; // Deck tab index 0..3
+            return i; // Note tab index
         }
         current += pillLen + gap;
     }
@@ -1663,7 +1877,7 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             GetCursorPos(&pt);
             ScreenToClient(hwnd, &pt);
             int hit = HitTestDock(hwnd, pt.x, pt.y);
-            if (hit == -2 || (hit >= 0 && hit < 4) || (hit >= 100 && hit <= 103)) {
+            if (hit == -2 || (hit >= 0 && hit < 100) || (hit >= 100 && hit <= 103)) {
                 SetCursor(LoadCursorW(nullptr, IDC_HAND));
                 return TRUE;
             }
@@ -1713,6 +1927,13 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (hit != hoveredTabIndex) {
                 hoveredTabIndex = hit;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                if (hit >= 0 && hit < 100 && appState == AppState::Collapsed) {
+                    auto deckNotes = GetDeckNotes();
+                    if (!deckNotes.empty() && hit < static_cast<int>(deckNotes.size())) {
+                        activeId = deckNotes[hit]->id;
+                    }
+                    SetAppState(AppState::Peek);
+                }
             }
 
             TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
@@ -1724,6 +1945,16 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!isDraggingDock) {
                 hoveredTabIndex = -1;
                 InvalidateRect(hwnd, nullptr, FALSE);
+                if (!config.pinned && appState == AppState::Peek) {
+                    POINT pt;
+                    GetCursorPos(&pt);
+                    RECT dockR{}, peekR{};
+                    GetWindowRect(dockHwnd, &dockR);
+                    GetWindowRect(peekHwnd, &peekR);
+                    if (!PtInRect(&dockR, pt) && !PtInRect(&peekR, pt)) {
+                        SetAppState(AppState::Collapsed);
+                    }
+                }
             }
             return 0;
         }
@@ -1742,23 +1973,16 @@ LRESULT CALLBACK DockWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
 
-            if (hit >= 0 && hit < 4) {
-                activeDeck = hit;
-                if (appState == AppState::Collapsed) {
-                    SetAppState(AppState::Peek);
-                } else if (appState == AppState::Peek) {
-                    InvalidateRect(peekHwnd, nullptr, TRUE);
-                    InvalidateRect(dockHwnd, nullptr, TRUE);
-                } else if (appState == AppState::Editing) {
-                    auto deckNotes = GetNotesForActiveDeck();
-                    if (!deckNotes.empty()) {
-                        activeId = deckNotes[0]->id;
-                        LoadActiveNoteIntoEditor();
-                    } else {
-                        ExecuteCommand(CmdNewNote);
-                    }
-                    InvalidateRect(dockHwnd, nullptr, TRUE);
+            auto deckNotes = GetDeckNotes();
+            if (hit >= 0 && hit < 100) {
+                if (deckNotes.empty()) {
+                    ExecuteCommand(CmdNewNote);
+                } else if (hit < static_cast<int>(deckNotes.size())) {
+                    activeId = deckNotes[hit]->id;
+                    SetAppState(AppState::Editing);
+                    LoadActiveNoteIntoEditor();
                 }
+                InvalidateRect(dockHwnd, nullptr, TRUE);
                 return 0;
             }
 
@@ -1840,16 +2064,18 @@ void PaintPeek(HWND hwnd) {
     int pad = Scale(hwnd, 16);
     int topH = Scale(hwnd, 44);
 
-    Gdiplus::SolidBrush dotBrush(ToGdiColor(DeckList[activeDeck].color));
+    auto notes = GetNotesForActiveDeck();
+    const auto* cur = GetActiveNote();
+    COLORREF dotColor = cur ? PaperColors[cur->color % 8] : PaperColors[0];
+    Gdiplus::SolidBrush dotBrush(ToGdiColor(dotColor));
     g.FillEllipse(&dotBrush, pad, Scale(hwnd, 18), Scale(hwnd, 8), Scale(hwnd, 8));
 
     Gdiplus::Font headerFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 14)), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     Gdiplus::SolidBrush textBrush(ToGdiColor(NightInk));
-    std::wstring deckTitle = DeckList[activeDeck].titleName;
+    std::wstring deckTitle = L"Active Notes";
     g.DrawString(deckTitle.c_str(), -1, &headerFont, Gdiplus::PointF(static_cast<float>(pad + Scale(hwnd, 14)), static_cast<float>(Scale(hwnd, 14))), &textBrush);
 
-    auto notes = GetNotesForActiveDeck();
-    std::wstring countStr = std::to_wstring(notes.size()) + (notes.size() == 1 ? L" thought" : L" thoughts");
+    std::wstring countStr = std::to_wstring(notes.size()) + (notes.size() == 1 ? L" note" : L" notes");
     Gdiplus::Font countFont(L"Segoe UI", static_cast<float>(Scale(hwnd, 11)), Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     Gdiplus::SolidBrush mutedBrush(ToGdiColor(NightMuted));
     float countX = pad + Scale(hwnd, 20) + (static_cast<float>(deckTitle.length()) * Scale(hwnd, 10));
@@ -2020,6 +2246,16 @@ LRESULT CALLBACK PeekWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_MOUSELEAVE: {
             hoveredPeekCard = -1;
             InvalidateRect(hwnd, nullptr, FALSE);
+            if (!config.pinned && appState == AppState::Peek) {
+                POINT pt;
+                GetCursorPos(&pt);
+                RECT dockR{}, peekR{};
+                GetWindowRect(dockHwnd, &dockR);
+                GetWindowRect(peekHwnd, &peekR);
+                if (!PtInRect(&dockR, pt) && !PtInRect(&peekR, pt)) {
+                    SetAppState(AppState::Collapsed);
+                }
+            }
             return 0;
         }
 
@@ -3143,7 +3379,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
 
     config.load(configPath);
 
-    // Read notes from storage
+    // Read notes from storage (.enotes binary or notes.json)
+    std::wstring jsonPath = baseDir + L"\\notes.json";
+    bool loadedNotes = false;
     HANDLE hNotesFile = CreateFileW(storagePath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (hNotesFile != INVALID_HANDLE_VALUE) {
         LARGE_INTEGER size{};
@@ -3153,12 +3391,31 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
             if (ReadFile(hNotesFile, &bytes[0], static_cast<DWORD>(bytes.size()), &readBytes, nullptr) && (readBytes == bytes.size())) {
                 try {
                     store.notes = edgenotes::decode(bytes);
+                    loadedNotes = !store.notes.empty();
                 } catch (...) {
                     // Protected corrupt file
                 }
             }
         }
         CloseHandle(hNotesFile);
+    }
+    if (!loadedNotes) {
+        HANDLE hJson = CreateFileW(jsonPath.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hJson != INVALID_HANDLE_VALUE) {
+            LARGE_INTEGER size{};
+            if (GetFileSizeEx(hJson, &size) && size.QuadPart > 0 && size.QuadPart < 128 * 1024 * 1024) {
+                std::string bytes(static_cast<std::size_t>(size.QuadPart), '\0');
+                DWORD readBytes = 0;
+                if (ReadFile(hJson, &bytes[0], static_cast<DWORD>(bytes.size()), &readBytes, nullptr) && (readBytes == bytes.size())) {
+                    try {
+                        store.notes = edgenotes::decodeJson(bytes);
+                        loadedNotes = !store.notes.empty();
+                    } catch (...) {
+                    }
+                }
+            }
+            CloseHandle(hJson);
+        }
     }
 
     for (const auto& n : store.notes) {
@@ -3195,6 +3452,13 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     wcManager.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
     RegisterClassW(&wcManager);
 
+    WNDCLASSW wcUndo{0};
+    wcUndo.lpfnWndProc = UndoWndProc;
+    wcUndo.hInstance = inst;
+    wcUndo.lpszClassName = L"EdgeUndoToast";
+    wcUndo.hCursor = LoadCursorW(nullptr, (LPCWSTR)IDC_ARROW);
+    RegisterClassW(&wcUndo);
+
     // 7. Create Windows
     dockHwnd = CreateWindowExW(
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED, L"EdgeDock", L"EdgeNotes Dock",
@@ -3214,6 +3478,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     managerHwnd = CreateWindowExW(
         0, L"EdgeManager", L"EdgeNotes \x2014 All notes",
         WS_OVERLAPPEDWINDOW, 140, 120, 880, 600, nullptr, nullptr, inst, nullptr);
+
+    undoHwnd = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"EdgeUndoToast", L"EdgeNotes Undo",
+        WS_POPUP, 0, 0, 310, 44, nullptr, nullptr, inst, nullptr);
 
     if (!dockHwnd || !peekHwnd || !editorHwnd || !managerHwnd) return 2;
 
@@ -3298,6 +3566,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, LPWSTR, int) {
     if (IsWindow(editorHwnd)) DestroyWindow(editorHwnd);
     if (IsWindow(peekHwnd)) DestroyWindow(peekHwnd);
     if (IsWindow(managerHwnd)) DestroyWindow(managerHwnd);
+    if (IsWindow(undoHwnd)) DestroyWindow(undoHwnd);
     if (IsWindow(dockHwnd)) DestroyWindow(dockHwnd);
 
     DeleteObject(uiFont);
