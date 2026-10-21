@@ -2370,22 +2370,26 @@ void PaintPeek(HWND hwnd) {
     seamSf.SetAlignment(Gdiplus::StringAlignmentCenter);
     seamSf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
 
+    float seamWf = static_cast<float>(seamW);
+    float halfBottom = static_cast<float>(client.bottom) * 0.5f;
+    float halfSeam = seamWf * 0.5f;
+
     if (isDockRight) {
         Gdiplus::GraphicsState sState = g.Save();
-        float cx = static_cast<float>(client.right - seamW / 2);
-        float cy = static_cast<float>(client.bottom / 2);
+        float cx = static_cast<float>(client.right) - halfSeam;
+        float cy = halfBottom;
         g.TranslateTransform(cx, cy);
         g.RotateTransform(90.0f);
-        Gdiplus::RectF seamBound(-static_cast<float>(client.bottom / 2), -static_cast<float>(seamW / 2), static_cast<float>(client.bottom), static_cast<float>(seamW));
+        Gdiplus::RectF seamBound(-halfBottom, -halfSeam, static_cast<float>(client.bottom), seamWf);
         g.DrawString(seamLabel.c_str(), -1, &seamFont, seamBound, &seamSf, &seamBrush);
         g.Restore(sState);
     } else {
         Gdiplus::GraphicsState sState = g.Save();
-        float cx = static_cast<float>(seamW / 2);
-        float cy = static_cast<float>(client.bottom / 2);
+        float cx = halfSeam;
+        float cy = halfBottom;
         g.TranslateTransform(cx, cy);
         g.RotateTransform(270.0f);
-        Gdiplus::RectF seamBound(-static_cast<float>(client.bottom / 2), -static_cast<float>(seamW / 2), static_cast<float>(client.bottom), static_cast<float>(seamW));
+        Gdiplus::RectF seamBound(-halfBottom, -halfSeam, static_cast<float>(client.bottom), seamWf);
         g.DrawString(seamLabel.c_str(), -1, &seamFont, seamBound, &seamSf, &seamBrush);
         g.Restore(sState);
     }
@@ -3151,7 +3155,8 @@ void PaintManager(HWND hwnd) {
     // Close button [✕]
     int closeSize = Scale(hwnd, 26);
     int closeX = client.right - pad - closeSize;
-    Gdiplus::RectF closeRect(static_cast<float>(closeX), static_cast<float>((bannerH - closeSize) / 2), static_cast<float>(closeSize), static_cast<float>(closeSize));
+    float closeY = static_cast<float>(bannerH - closeSize) * 0.5f;
+    Gdiplus::RectF closeRect(static_cast<float>(closeX), closeY, static_cast<float>(closeSize), static_cast<float>(closeSize));
     Gdiplus::Font closeFont(L"Segoe UI", ScaleF(hwnd, 12.0f), Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     g.DrawString(L"\x2715", -1, &closeFont, closeRect, &centerSf, &mutedTextBrush);
 
