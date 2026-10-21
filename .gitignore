@@ -43,4 +43,13 @@ compile_commands.json
 native/windows/.clangd
 native/windows/compile_commands.json
 extracted_peekynotes/
+.agent/
+.agents/
+.gemini/
+.gsd/
+adapters/
+scripts/
+GSD-STYLE.md
+PROJECT_RULES.md
+model_capabilities.yaml
 
