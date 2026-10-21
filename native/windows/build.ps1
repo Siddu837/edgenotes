@@ -38,5 +38,8 @@ try {
   if (Test-Path $releaseDir) {
     Copy-Item build\EdgeNotes.exe (Join-Path $releaseDir "EdgeNotes-windows-x64.exe") -Force
     Copy-Item excalifont-regular.ttf (Join-Path $releaseDir "excalifont-regular.ttf") -Force -ErrorAction SilentlyContinue
+    $zipPath = Join-Path $releaseDir "EdgeNotes-windows-x64.zip"
+    if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+    Compress-Archive -Path (Join-Path $releaseDir "EdgeNotes-windows-x64.exe"),(Join-Path $releaseDir "excalifont-regular.ttf") -DestinationPath $zipPath
   }
 } finally { Pop-Location }

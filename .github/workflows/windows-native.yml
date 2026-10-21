@@ -28,7 +28,7 @@ jobs:
         run: |
           Copy-Item native/windows/README.md native/windows/build/README.md
           Copy-Item native/windows/build/EdgeNotes.exe native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.exe
-          Compress-Archive -Path native/windows/build/EdgeNotes.exe,native/windows/build/README.md -DestinationPath native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.zip
+          Compress-Archive -Path native/windows/build/EdgeNotes.exe,native/windows/build/excalifont-regular.ttf,native/windows/build/README.md -DestinationPath native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: EdgeNotes-windows-${{ matrix.arch }}
@@ -42,4 +42,5 @@ jobs:
           files: |
             native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.zip
             native/windows/build/EdgeNotes-windows-${{ matrix.arch }}.exe
+            native/windows/build/excalifont-regular.ttf
           generate_release_notes: true

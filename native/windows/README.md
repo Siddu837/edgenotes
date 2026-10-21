@@ -12,6 +12,8 @@ Output:
 - Tests: `native/windows/build/store-tests.exe`
 - App: `native/windows/build/EdgeNotes.exe`
 - Release executable: `release/EdgeNotes-windows-x64.exe`
+- Portable release package: `release/EdgeNotes-windows-x64.zip`
+- Bundled font: `release/excalifont-regular.ttf`
 
 ## Features & Redesign Parity
 
