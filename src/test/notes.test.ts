@@ -1,10 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { initialNotes, removeLegacySamples, plainText, type Note } from "@/lib/notes";
+import {
+  initialNotes,
+  removeLegacySamples,
+  plainText,
+  getNoteFontClass,
+  fontOptions,
+  type Note,
+} from "@/lib/notes";
 import { toMarkdown } from "@/lib/markdown-export";
 
 describe("Note export", () => {
   it("starts empty and removes only legacy samples from saved notes", () => {
-    const real: Note = { id: "user-created-uuid", deck: "work", title: "Website refresh", content: "<p>My own content</p>", tags: [], updated: "2026-10-13T00:00:00Z" };
+    const real: Note = {
+      id: "user-created-uuid",
+      deck: "work",
+      title: "Website refresh",
+      content: "<p>My own content</p>",
+      tags: [],
+      updated: "2026-10-13T00:00:00Z",
+    };
     expect(initialNotes).toEqual([]);
     expect(removeLegacySamples([{ ...real, id: "website" }, real])).toEqual([real]);
   });
@@ -22,5 +36,13 @@ describe("Note export", () => {
   });
   it("extracts readable body text for search and word counts", () => {
     expect(plainText("<p>Design &amp; ideas</p><h2>Next</h2>")).toBe("Design & ideas\nNext");
+  });
+  it("resolves note typography font classes correctly", () => {
+    expect(getNoteFontClass("handwritten")).toBe("font-handwritten");
+    expect(getNoteFontClass("sans")).toBe("font-sans");
+    expect(getNoteFontClass("rounded")).toBe("font-rounded");
+    expect(getNoteFontClass("mono")).toBe("font-mono");
+    expect(getNoteFontClass(undefined)).toBe("font-handwritten");
+    expect(fontOptions.map((f) => f.id)).toEqual(["handwritten", "sans", "rounded", "mono"]);
   });
 });

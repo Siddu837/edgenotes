@@ -28,7 +28,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { Note } from "@/lib/notes";
+import { type Note, type NoteFont, fontOptions, getNoteFontClass } from "@/lib/notes";
 
 function CodeSnippet({ node }: NodeViewProps) {
   const [copied, setCopied] = useState(false);
@@ -66,7 +66,18 @@ const CopyableCode = CodeBlock.extend({
   },
 });
 
-export function NoteEditor({ note, onChange }: { note: Note; onChange: (html: string) => void }) {
+export function NoteEditor({
+  note,
+  onChange,
+  onFontChange,
+  completedTasksAtBottom,
+}: {
+  note: Note;
+  onChange: (html: string) => void;
+  onFontChange?: (font: NoteFont) => void;
+  completedTasksAtBottom?: boolean;
+}) {
+  const currentFont = note.font || "handwritten";
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -84,7 +95,11 @@ export function NoteEditor({ note, onChange }: { note: Note; onChange: (html: st
     immediatelyRender: false,
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
     editorProps: {
-      attributes: { class: "note-prose", "aria-label": "Note content", spellcheck: "true" },
+      attributes: {
+        class: `note-prose ${getNoteFontClass(currentFont)}`,
+        "aria-label": "Note content",
+        spellcheck: "true",
+      },
     },
   });
   const [, render] = useState(0);
@@ -178,6 +193,20 @@ export function NoteEditor({ note, onChange }: { note: Note; onChange: (html: st
           </select>
           <ChevronDown size={12} />
         </div>
+        <div className="heading-select font-select">
+          <select
+            aria-label="Note font"
+            value={currentFont}
+            onChange={(e) => onFontChange?.(e.target.value as NoteFont)}
+          >
+            {fontOptions.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown size={12} />
+        </div>
         <span className="toolbar-divider" />
         {tools.map(({ label, icon: Icon, active, run }) => (
           <Button
@@ -215,7 +244,13 @@ export function NoteEditor({ note, onChange }: { note: Note; onChange: (html: st
           <Redo2 />
         </Button>
       </div>
-      <EditorContent editor={editor} />
+      <div
+        className={`editor-content-wrap ${getNoteFontClass(currentFont)} ${
+          completedTasksAtBottom ? "completed-tasks-bottom" : ""
+        }`}
+      >
+        <EditorContent editor={editor} />
+      </div>
     </>
   );
 }

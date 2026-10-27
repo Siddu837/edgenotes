@@ -9,8 +9,20 @@ describe("Dock placement", () => {
     expect(dockAtPoint(500, 595, 1000, 600).side).toBe("bottom");
   });
   it("keeps custom corner placements inside the viewport", () => {
-    expect(dockCoordinates({side: "right", position: 1}, {width: 1000, height: 600}, {width: 35, height: 400})).toEqual({left: 965, top: 200});
-    expect(dockCoordinates({side: "top", position: 0}, {width: 1000, height: 600}, {width: 450, height: 35})).toEqual({left: 0, top: 0});
+    expect(
+      dockCoordinates(
+        { side: "right", position: 1 },
+        { width: 1000, height: 600 },
+        { width: 35, height: 400 },
+      ),
+    ).toEqual({ left: 965, top: 200 });
+    expect(
+      dockCoordinates(
+        { side: "top", position: 0 },
+        { width: 1000, height: 600 },
+        { width: 450, height: 35 },
+      ),
+    ).toEqual({ left: 0, top: 0 });
     expect(dockAtPoint(-50, 20, 1000, 600).position).toBeGreaterThanOrEqual(0);
   });
 });

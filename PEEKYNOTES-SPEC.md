@@ -6,14 +6,14 @@ Extracted via **REA (Reverse Engineering Assistant)** from `C:\Users\keert\Downl
 
 ## 1. Executive Summary & Binary Profile
 
-| Property | Details |
-|---|---|
-| **Original Binary** | `C:\Users\keert\Downloads\PeekyNotes.exe` (26,518,325 bytes) |
-| **SHA-256** | `64081df9d5418eb3546592140fc1ec2873c94c24ec7c595992f845f6bbc54bb4` |
-| **Packaging** | .NET 8 Single-File Host (`PublishSingleFile=true`) bundling 6 files |
-| **Bundled Core Logic** | `PeekyNotes.Core.dll` (101,376 bytes), .NET 8.0 AnyCPU CLI |
-| **DPI Awareness** | `PerMonitorV2` (manifested) |
-| **Target App Name** | EdgeNotes (`C:\Users\keert\.gemini\antigravity\scratch\edgenotes`) |
+| Property                | Details                                                                           |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| **Original Binary**     | `C:\Users\keert\Downloads\PeekyNotes.exe` (26,518,325 bytes)                      |
+| **SHA-256**             | `64081df9d5418eb3546592140fc1ec2873c94c24ec7c595992f845f6bbc54bb4`                |
+| **Packaging**           | .NET 8 Single-File Host (`PublishSingleFile=true`) bundling 6 files               |
+| **Bundled Core Logic**  | `PeekyNotes.Core.dll` (101,376 bytes), .NET 8.0 AnyCPU CLI                        |
+| **DPI Awareness**       | `PerMonitorV2` (manifested)                                                       |
+| **Target App Name**     | EdgeNotes (`C:\Users\keert\.gemini\antigravity\scratch\edgenotes`)                |
 | **Implementation Rule** | High-performance native Win32 C++ in `native/windows/` (no Electron, no WebView2) |
 
 ---
@@ -23,6 +23,7 @@ Extracted via **REA (Reverse Engineering Assistant)** from `C:\Users\keert\Downl
 From `PeekyNotes.Model`:
 
 ### `Note`
+
 ```json
 {
   "id": "guid-or-string",
@@ -60,6 +61,7 @@ From `PeekyNotes.Model`:
 ```
 
 ### Enumerations & Models
+
 - **`BlockKind`**:
   - `0`: Plain Text
   - `1`: Heading (`# `)
@@ -86,6 +88,7 @@ From `PeekyNotes.Model`:
 ## 3. Storage & Persistence Engine
 
 From `PeekyNotes.Model.NoteRepository`:
+
 - **Active Directory**: `%USERPROFILE%\Documents\Peeky Notes\`
 - **Database File**: `notes.json`
 - **Fallback / Legacy**: `%LOCALAPPDATA%\PeekyNotes\` (auto-migrated with `.moved-to-documents.txt`)
@@ -122,7 +125,7 @@ From `PeekyNotes.Model.NoteRepository`:
   - Immediately hides the note and initiates a 10-second non-blocking undo countdown banner with an **Undo** button.
   - Commit deletion only after 10 seconds elapse or on application exit.
 - **System Tray Icon**:
-  - Context menu: *New Note*, *All Notes*, *Dock Position (Left/Right/Top/Bottom)*, *Settings*, *Exit*.
+  - Context menu: _New Note_, _All Notes_, _Dock Position (Left/Right/Top/Bottom)_, _Settings_, _Exit_.
   - Listens for `TaskbarCreated` message to restore tray icon if `explorer.exe` restarts.
 
 ---
@@ -130,6 +133,7 @@ From `PeekyNotes.Model.NoteRepository`:
 ## 5. EdgeNotes Implementation Objectives
 
 The target codebase in `C:\Users\keert\.gemini\antigravity\scratch\edgenotes`:
+
 - Native Win32 C++ implementation in `native/windows/` (`main.cpp`, `note-store.hpp`, `config.hpp`, `theme.hpp`).
 - Build system: `build.ps1` using MSVC `cl.exe` + `rc.exe`.
 - Requirement: Zero CPU usage when idle, ~7 MB working set, zero external runtime dependencies.

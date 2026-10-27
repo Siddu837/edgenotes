@@ -5,10 +5,13 @@ This is a standalone Win32 C++ desktop implementation, **not the browser preview
 ## Build and Run
 
 To build locally, open Developer PowerShell (VS 2022 Build Tools) and run:
+
 ```powershell
 ./native/windows/build.ps1
 ```
+
 Output:
+
 - Tests: `native/windows/build/store-tests.exe`
 - App: `native/windows/build/EdgeNotes.exe`
 - Release executable: `release/EdgeNotes-windows-x64.exe`
@@ -55,4 +58,4 @@ Output:
    - Non-blocking notification if a shortcut is claimed by another application.
    - System tray menu with Explorer restart recovery (`TaskbarCreated`).
    - Single-instance activation (`EdgeNotes_ActivateInstance`).
-   - 0% idle CPU and native memory footprint (~5-30 MB working set).
+   - 0% idle CPU and native memory footprint (~5-30 MB working set).

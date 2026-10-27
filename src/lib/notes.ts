@@ -1,3 +1,5 @@
+export type NoteFont = "handwritten" | "sans" | "rounded" | "mono";
+
 export type Note = {
   id: string;
   deck: string;
@@ -6,7 +8,36 @@ export type Note = {
   tags: string[];
   updated: string;
   color?: string;
+  font?: NoteFont;
+  completedTasksAtBottom?: boolean;
 };
+
+export const fontOptions: { id: NoteFont; label: string; preview: string; className: string }[] = [
+  {
+    id: "handwritten",
+    label: "Handwritten",
+    preview: "Kalam / Script",
+    className: "font-handwritten",
+  },
+  { id: "sans", label: "Sans-Serif", preview: "Clean modern UI", className: "font-sans" },
+  { id: "rounded", label: "Rounded", preview: "Soft & friendly", className: "font-rounded" },
+  { id: "mono", label: "Monospace", preview: "Typewriter / Code", className: "font-mono" },
+];
+
+export function getNoteFontClass(font?: NoteFont | string): string {
+  switch (font) {
+    case "sans":
+      return "font-sans";
+    case "rounded":
+      return "font-rounded";
+    case "mono":
+      return "font-mono";
+    case "handwritten":
+    default:
+      return "font-handwritten";
+  }
+}
+
 export const decks = [
   { id: "work", name: "Work", color: "work", icon: "briefcase" },
   { id: "personal", name: "Personal", color: "personal", icon: "user" },
@@ -17,13 +48,27 @@ export const decks = [
 export const STORAGE_KEY = "edgenotes-core-v1";
 export const noteColors = ["mint", "sky", "lavender", "yellow", "rose", "peach", "aqua", "paper"];
 export function noteColor(note: Note) {
-  return note.color && noteColors.includes(note.color) ? note.color : ({ work: "mint", personal: "sky", scratchpad: "yellow", ideas: "rose", archive: "lavender" }[note.deck] || "mint");
+  return note.color && noteColors.includes(note.color)
+    ? note.color
+    : { work: "mint", personal: "sky", scratchpad: "yellow", ideas: "rose", archive: "lavender" }[
+        note.deck
+      ] || "mint";
 }
 export const initialNotes: Note[] = [];
 
-const legacySampleIds = new Set(["website", "meeting", "launch", "links", "weekend", "books", "scratch", "idea", "archive"]);
+const legacySampleIds = new Set([
+  "website",
+  "meeting",
+  "launch",
+  "links",
+  "weekend",
+  "books",
+  "scratch",
+  "idea",
+  "archive",
+]);
 export function removeLegacySamples(notes: Note[]): Note[] {
-  return notes.filter(note => !legacySampleIds.has(note.id));
+  return notes.filter((note) => !legacySampleIds.has(note.id));
 }
 
 export function plainText(html: string) {

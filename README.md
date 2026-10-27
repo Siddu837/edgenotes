@@ -3,6 +3,7 @@
 Build the EdgeNotes Core Desktop App experience with the complete edge-docked notes interface.
 
 Key features to implement:
+
 1. Edge-Docked Drawer Layout:
    - A vertical dock bar on the edge (dockable left or right) with color-coded deck categories (e.g., Work, Personal, Scratchpad, Archive, Ideas).
    - Smooth slide-out / slide-in drawer mechanism with a pin/unpin toggle button (pinned = keeps open; unpinned = closes when clicking outside or pressing Escape).

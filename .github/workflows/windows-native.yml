@@ -2,11 +2,11 @@ name: Build native EdgeNotes for Windows
 on:
   workflow_dispatch:
   push:
-    paths: ['native/windows/**', '.github/workflows/windows-native.yml', 'release/**']
+    paths: ["native/windows/**", ".github/workflows/windows-native.yml", "release/**"]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
-    paths: ['native/windows/**', '.github/workflows/windows-native.yml']
+    paths: ["native/windows/**", ".github/workflows/windows-native.yml"]
 permissions:
   contents: write
 jobs:

@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { noteColor, noteColors, type Note } from "@/lib/notes";
 
-const note: Note = { id: "test-note", deck: "work", title: "My note", content: "<p></p>", tags: [], updated: "2026-10-13T00:00:00Z" };
+const note: Note = {
+  id: "test-note",
+  deck: "work",
+  title: "My note",
+  content: "<p></p>",
+  tags: [],
+  updated: "2026-10-13T00:00:00Z",
+};
 
 describe("Pastel paper colors", () => {
   it("preserves older notes without a paper color", () => {

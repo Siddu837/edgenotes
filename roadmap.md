@@ -1,4 +1,5 @@
 # EdgeNotes
+
 - [x] Fix overlapping previews, outside-click dismissal, and new-note visibility in the browser.
 - [x] Add four-edge docking and drag-to-position controls; verify interactions.
 - [x] Build dock, drawer, deck list, search, and note management.

@@ -49,8 +49,20 @@ import {
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
 import { NoteEditor } from "@/components/note-editor";
-import { decks, initialNotes, removeLegacySamples, plainText, STORAGE_KEY, noteColor, noteColors, type Note } from "@/lib/notes";
+import {
+  decks,
+  initialNotes,
+  removeLegacySamples,
+  plainText,
+  STORAGE_KEY,
+  noteColor,
+  noteColors,
+  getNoteFontClass,
+  type Note,
+  type NoteFont,
+} from "@/lib/notes";
 import { NotesManager } from "@/components/notes-manager";
+import { SettingsDialog } from "@/components/settings-dialog";
 import wallpaper from "@/assets/night-lake.jpg";
 import { toMarkdown } from "@/lib/markdown-export";
 import { dockAtPoint, dockCoordinates, type DockSide } from "@/lib/dock-position";
@@ -86,7 +98,12 @@ function Index() {
   const [pinned, setPinned] = useState(false);
   const [peeking, setPeeking] = useState(true);
   const [manager, setManager] = useState(false);
-  const [deleted, setDeleted] = useState<{note: Note; index: number; expires: number} | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [defaultFont, setDefaultFont] = useState<NoteFont>("handwritten");
+  const [completedTasksAtBottom, setCompletedTasksAtBottom] = useState(true);
+  const [deleted, setDeleted] = useState<{ note: Note; index: number; expires: number } | null>(
+    null,
+  );
   const [side, setSide] = useState<DockSide>("right");
   const [dockPosition, setDockPosition] = useState(0.5);
   const [dragging, setDragging] = useState(false);
@@ -114,14 +131,20 @@ function Index() {
       if (element) setDockSize({ width: element.offsetWidth, height: element.offsetHeight });
     });
     if (element) observer.observe(element);
-    return () => { window.removeEventListener("resize", resize); observer.disconnect(); };
+    return () => {
+      window.removeEventListener("resize", resize);
+      observer.disconnect();
+    };
   }, []);
   const moveDock = (x: number, y: number) => {
     const placement = dockAtPoint(x, y, viewport.width, viewport.height);
     setSide(placement.side);
     setDockPosition(placement.position);
   };
-  const chooseSide = (next: DockSide) => { setSide(next); setDockPosition(0.5); };
+  const chooseSide = (next: DockSide) => {
+    setSide(next);
+    setDockPosition(0.5);
+  };
   const active = notes.find((n) => n.id === activeId);
   const currentDeck = decks.find((d) => d.id === deck) || {
     id: "work",
@@ -174,12 +197,27 @@ function Index() {
         ) {
           const restored = removeLegacySamples(value.notes);
           setNotes(restored);
-          setActiveId(restored.some(n => n.id === value.activeId) ? value.activeId : restored[0]?.id || "");
+          setActiveId(
+            restored.some((n) => n.id === value.activeId) ? value.activeId : restored[0]?.id || "",
+          );
           setDeck(value.deck || "work");
           setDark(Boolean(value.dark));
           setSide(["left", "right", "top", "bottom"].includes(value.side) ? value.side : "right");
-          setDockPosition(typeof value.dockPosition === "number" ? Math.max(0, Math.min(1, value.dockPosition)) : 0.5);
+          setDockPosition(
+            typeof value.dockPosition === "number"
+              ? Math.max(0, Math.min(1, value.dockPosition))
+              : 0.5,
+          );
           setPinned(value.pinned === true);
+          if (
+            value.defaultFont &&
+            ["handwritten", "sans", "rounded", "mono"].includes(value.defaultFont)
+          ) {
+            setDefaultFont(value.defaultFont);
+          }
+          if (typeof value.completedTasksAtBottom === "boolean") {
+            setCompletedTasksAtBottom(value.completedTasksAtBottom);
+          }
         }
       }
     } catch {
@@ -194,7 +232,17 @@ function Index() {
       try {
         localStorage.setItem(
           STORAGE_KEY,
-          JSON.stringify({ notes, activeId, deck, dark, side, dockPosition, pinned }),
+          JSON.stringify({
+            notes,
+            activeId,
+            deck,
+            dark,
+            side,
+            dockPosition,
+            pinned,
+            defaultFont,
+            completedTasksAtBottom,
+          }),
         );
         setSaveStatus("Saved locally");
       } catch {
@@ -202,7 +250,18 @@ function Index() {
       }
     }, 350);
     return () => clearTimeout(timer);
-  }, [notes, activeId, deck, dark, side, dockPosition, pinned, ready]);
+  }, [
+    notes,
+    activeId,
+    deck,
+    dark,
+    side,
+    dockPosition,
+    pinned,
+    defaultFont,
+    completedTasksAtBottom,
+    ready,
+  ]);
   useEffect(() => {
     const keydown = (e: KeyboardEvent) => {
       if (e.altKey && (e.code === "Space" || (e.metaKey && e.code === "KeyN"))) {
@@ -210,9 +269,24 @@ function Index() {
         setOpen((o) => !o);
         setPeeking(true);
       }
-      if (e.key === "Escape") { setOpen(false); setManager(false); }
-      if (e.ctrlKey && e.altKey && e.code === "KeyA") { e.preventDefault(); setManager(true); }
-      if (e.ctrlKey && e.altKey && e.code === "KeyL") { e.preventDefault(); switchDeck("archive"); setManager(true); }
+      if (e.key === "Escape") {
+        setOpen(false);
+        setManager(false);
+        setSettingsOpen(false);
+      }
+      if (e.ctrlKey && e.altKey && e.code === "KeyA") {
+        e.preventDefault();
+        setManager(true);
+      }
+      if (e.ctrlKey && e.altKey && e.code === "KeyL") {
+        e.preventDefault();
+        switchDeck("archive");
+        setManager(true);
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen(true);
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setOpen(true);
@@ -228,7 +302,10 @@ function Index() {
         !drawer.current?.contains(e.target) &&
         !dock.current?.contains(e.target) &&
         !peek.current?.contains(e.target) &&
-        !(e.target instanceof Element && e.target.closest('[role="menu"], .manager-overlay, .undo-toast'))
+        !(
+          e.target instanceof Element &&
+          e.target.closest('[role="menu"], .manager-overlay, .settings-overlay, .undo-toast')
+        )
       )
         setOpen(false);
     };
@@ -246,7 +323,10 @@ function Index() {
       ),
     );
   const switchDeck = (id: string) => {
-    if (id === deck && open && peeking) { setOpen(false); return; }
+    if (id === deck && open && peeking) {
+      setOpen(false);
+      return;
+    }
     setDeck(id);
     setQuery("");
     setTag("");
@@ -266,6 +346,8 @@ function Index() {
       content: "<p></p>",
       tags: [],
       updated: new Date().toISOString(),
+      font: defaultFont,
+      completedTasksAtBottom,
     };
     setNotes((n) => [note, ...n]);
     setActiveId(note.id);
@@ -291,7 +373,10 @@ function Index() {
   };
   useEffect(() => {
     const handleNew = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyN" || e.ctrlKey && e.altKey && !e.metaKey && e.code === "KeyN") {
+      if (
+        ((e.metaKey || e.ctrlKey) && !e.altKey && e.code === "KeyN") ||
+        (e.ctrlKey && e.altKey && !e.metaKey && e.code === "KeyN")
+      ) {
         e.preventDefault();
         setOpen(true);
         addNote();
@@ -301,18 +386,40 @@ function Index() {
     return () => window.removeEventListener("keydown", handleNew);
   }, [deck]);
   const removeNote = (note: Note) => {
-    setDeleted({note, index: notes.findIndex(n=>n.id===note.id), expires: Date.now()+10000});
+    setDeleted({
+      note,
+      index: notes.findIndex((n) => n.id === note.id),
+      expires: Date.now() + 10000,
+    });
     const next = notes.filter((n) => n.id !== note.id);
     setNotes(next);
     if (activeId === note.id) setActiveId(next.find((n) => n.deck === deck)?.id || "");
   };
-  const remove = () => { if (active) removeNote(active); };
-  const undoDelete = () => {
-    if (!deleted || Date.now() > deleted.expires) { setDeleted(null); return; }
-    setNotes(items => { const next=[...items]; next.splice(deleted.index,0,deleted.note); return next; });
-    setActiveId(deleted.note.id); setDeck(deleted.note.deck); setDeleted(null);
+  const remove = () => {
+    if (active) removeNote(active);
   };
-  const openNote = (note: Note) => { setActiveId(note.id); setDeck(note.deck); setOpen(true); setPeeking(false); setMobileList(false); setManager(false); };
+  const undoDelete = () => {
+    if (!deleted || Date.now() > deleted.expires) {
+      setDeleted(null);
+      return;
+    }
+    setNotes((items) => {
+      const next = [...items];
+      next.splice(deleted.index, 0, deleted.note);
+      return next;
+    });
+    setActiveId(deleted.note.id);
+    setDeck(deleted.note.deck);
+    setDeleted(null);
+  };
+  const openNote = (note: Note) => {
+    setActiveId(note.id);
+    setDeck(note.deck);
+    setOpen(true);
+    setPeeking(false);
+    setMobileList(false);
+    setManager(false);
+  };
   const exportNotes = (all: boolean, format: "md" | "txt") => {
     const selection = all ? notes : active ? [active] : [];
     if (!selection.length) return;
@@ -345,10 +452,56 @@ function Index() {
         height={1088}
       />
       <div className="desktop-shade" />
-      <div className="desktop-brand"><Layers2 size={24}/><strong>EdgeNotes</strong><span>A place for the passing thought.</span></div>
-      <Button className="manager-launch" variant="ghost" onClick={()=>setManager(true)}><Grid2X2 size={15}/>All notes<span>{notes.length}</span></Button>
-      <nav ref={dock} className="edge-dock" aria-label="Deck dock" style={dockCoordinates({side, position: dockPosition}, viewport, dockSize)}>
-        <Button variant="ghost" size="icon" className="dock-grip" aria-label="Move dock" title="Drag dock to an edge or corner" onPointerDown={e => { e.preventDefault(); e.currentTarget.setPointerCapture(e.pointerId); setDragging(true); }} onPointerMove={e => { if (dragging) moveDock(e.clientX, e.clientY); }} onPointerUp={e => { if (dragging) moveDock(e.clientX, e.clientY); setDragging(false); }} onPointerCancel={()=>setDragging(false)} onKeyDown={e => { const edges: Record<string, DockSide> = {ArrowLeft: "left", ArrowRight: "right", ArrowUp: "top", ArrowDown: "bottom"}; const next = edges[e.key]; if (next) { e.preventDefault(); chooseSide(next); } }}><Grip size={14}/></Button>
+      <div className="desktop-brand">
+        <Layers2 size={24} />
+        <strong>EdgeNotes</strong>
+        <span>A place for the passing thought.</span>
+      </div>
+      <Button className="manager-launch" variant="ghost" onClick={() => setManager(true)}>
+        <Grid2X2 size={15} />
+        All notes<span>{notes.length}</span>
+      </Button>
+      <nav
+        ref={dock}
+        className="edge-dock"
+        aria-label="Deck dock"
+        style={dockCoordinates({ side, position: dockPosition }, viewport, dockSize)}
+      >
+        <Button
+          variant="ghost"
+          size="icon"
+          className="dock-grip"
+          aria-label="Move dock"
+          title="Drag dock to an edge or corner"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setDragging(true);
+          }}
+          onPointerMove={(e) => {
+            if (dragging) moveDock(e.clientX, e.clientY);
+          }}
+          onPointerUp={(e) => {
+            if (dragging) moveDock(e.clientX, e.clientY);
+            setDragging(false);
+          }}
+          onPointerCancel={() => setDragging(false)}
+          onKeyDown={(e) => {
+            const edges: Record<string, DockSide> = {
+              ArrowLeft: "left",
+              ArrowRight: "right",
+              ArrowUp: "top",
+              ArrowDown: "bottom",
+            };
+            const next = edges[e.key];
+            if (next) {
+              e.preventDefault();
+              chooseSide(next);
+            }
+          }}
+        >
+          <Grip size={14} />
+        </Button>
         <Button
           variant="ghost"
           size="icon"
@@ -372,13 +525,23 @@ function Index() {
                 aria-pressed={deck === d.id && open}
                 onClick={() => switchDeck(d.id)}
               >
-                <Icon /><span>{d.name}</span>
+                <Icon />
+                <span>{d.name}</span>
               </Button>
             );
           })}
         </div>
         <div className="dock-bottom">
-          <Button variant="ghost" size="icon" title="New note" aria-label="New note from dock" onClick={addNote}><Plus/></Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="dock-add-btn"
+            title="New note"
+            aria-label="New note from dock"
+            onClick={addNote}
+          >
+            <Plus size={16} />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -388,37 +551,76 @@ function Index() {
           >
             {dark ? <Sun /> : <Moon />}
           </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" title="Dock settings" aria-label="Dock settings">
-                <Settings2 />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent side={side === "right" ? "left" : "right"}>
-              <DropdownMenuLabel>Make yourself at home</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => chooseSide("left")}>
-                <ArrowLeft />
-                Dock on left{side === "left" && <Check className="ml-auto" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => chooseSide("right")}>
-                <ArrowRight />
-                Dock on right{side === "right" && <Check className="ml-auto" />}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => chooseSide("top")}><ArrowUp/>Dock on top{side === "top" && <Check className="ml-auto" />}</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => chooseSide("bottom")}><ArrowDown/>Dock on bottom{side === "bottom" && <Check className="ml-auto" />}</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setPinned((p) => !p)}>
-                <Pin />
-                {pinned ? "Unpin drawer" : "Pin drawer"}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="dock-settings-btn"
+            title="Settings & customization"
+            aria-label="Settings & customization"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings2 />
+          </Button>
         </div>
       </nav>
       <div ref={peek} className="peek-deck" inert={!open || !peeking ? true : undefined}>
-        <header><div><span className={`deck-dot deck-${currentDeck.color}`}/><strong>{currentDeck.name}</strong><span>{notes.filter(n=>n.deck===deck).length} thoughts</span></div><Button variant="ghost" size="icon" aria-label="Collapse deck" title="Collapse deck" onClick={()=>setOpen(false)}><ChevronsRight/></Button></header>
-        <div className="peek-sheets">{notes.filter(n=>n.deck===deck).map(n=><Button key={n.id} variant="ghost" className={`peek-sheet paper-${noteColor(n)}`} onClick={()=>openNote(n)}><div className="peek-sheet-heading"><strong>{n.title}</strong><ArrowUpRight size={15}/></div><p className="handwritten">{plainText(n.content).slice(0,260)}</p><footer>{n.tags.map(t=><span key={t}>#{t}</span>)}</footer></Button>)}{!notes.some(n=>n.deck===deck)&&<Button variant="ghost" className="peek-sheet paper-paper" onClick={addNote}><Plus/><strong>A fresh page</strong></Button>}</div>
-        <footer><Button variant="ghost" onClick={addNote}><Plus size={14}/>New note</Button><Button variant="ghost" onClick={()=>setManager(true)}><Grid2X2 size={14}/>All notes</Button></footer>
+        <header>
+          <div>
+            <span className={`deck-dot deck-${currentDeck.color}`} />
+            <strong>{currentDeck.name}</strong>
+            <span>{notes.filter((n) => n.deck === deck).length} thoughts</span>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Collapse deck"
+            title="Collapse deck"
+            onClick={() => setOpen(false)}
+          >
+            <ChevronsRight />
+          </Button>
+        </header>
+        <div className="peek-sheets">
+          {notes
+            .filter((n) => n.deck === deck)
+            .map((n) => (
+              <Button
+                key={n.id}
+                variant="ghost"
+                className={`peek-sheet paper-${noteColor(n)}`}
+                onClick={() => openNote(n)}
+              >
+                <div className="peek-sheet-heading">
+                  <strong>{n.title}</strong>
+                  <ArrowUpRight size={15} />
+                </div>
+                <p className={getNoteFontClass(n.font || defaultFont)}>
+                  {plainText(n.content).slice(0, 260)}
+                </p>
+                <footer>
+                  {n.tags.map((t) => (
+                    <span key={t}>#{t}</span>
+                  ))}
+                </footer>
+              </Button>
+            ))}
+          {!notes.some((n) => n.deck === deck) && (
+            <Button variant="ghost" className="peek-sheet paper-paper" onClick={addNote}>
+              <Plus />
+              <strong>A fresh page</strong>
+            </Button>
+          )}
+        </div>
+        <footer>
+          <Button variant="ghost" onClick={addNote}>
+            <Plus size={14} />
+            New note
+          </Button>
+          <Button variant="ghost" onClick={() => setManager(true)}>
+            <Grid2X2 size={14} />
+            All notes
+          </Button>
+        </footer>
       </div>
       <div
         ref={drawer}
@@ -428,11 +630,17 @@ function Index() {
         <header className="window-header">
           <div className="brand">
             <Layers2 size={20} />
-            <span>
-              EdgeNotes
-            </span>
+            <span>EdgeNotes</span>
           </div>
-          <Button variant="ghost" size="icon" title="Back to deck" aria-label="Back to deck" onClick={()=>setPeeking(true)}><Layers2 size={16}/></Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            title="Back to deck"
+            aria-label="Back to deck"
+            onClick={() => setPeeking(true)}
+          >
+            <Layers2 size={16} />
+          </Button>
           <div className="window-actions">
             <Button
               variant="ghost"
@@ -783,8 +991,46 @@ function Index() {
                   key={`${ready}-${active.id}`}
                   note={active}
                   onChange={(content) => update({ content })}
+                  onFontChange={(font) => update({ font })}
+                  completedTasksAtBottom={completedTasksAtBottom}
                 />
-                <div className="note-sheet-footer"><div className="color-swatches" aria-label="Note colors">{noteColors.map(c=><Button key={c} variant="ghost" size="icon" className={`color-swatch paper-${c} ${noteColor(active)===c ? "swatch-selected" : ""}`} title={`${c} paper`} aria-label={`${c} paper`} aria-pressed={noteColor(active)===c} onClick={()=>update({color:c})}/>)}</div><Button variant="ghost" size="icon" title="Archive note" aria-label="Archive note" onClick={()=>{update({deck:"archive"});setDeck("archive");}}><Archive size={15}/></Button><Button variant="ghost" size="icon" title="Delete note" aria-label="Delete note" onClick={remove}><Trash2 size={15}/></Button></div>
+                <div className="note-sheet-footer">
+                  <div className="color-swatches" aria-label="Note colors">
+                    {noteColors.map((c) => (
+                      <Button
+                        key={c}
+                        variant="ghost"
+                        size="icon"
+                        className={`color-swatch paper-${c} ${noteColor(active) === c ? "swatch-selected" : ""}`}
+                        title={`${c} paper`}
+                        aria-label={`${c} paper`}
+                        aria-pressed={noteColor(active) === c}
+                        onClick={() => update({ color: c })}
+                      />
+                    ))}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Archive note"
+                    aria-label="Archive note"
+                    onClick={() => {
+                      update({ deck: "archive" });
+                      setDeck("archive");
+                    }}
+                  >
+                    <Archive size={15} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    title="Delete note"
+                    aria-label="Delete note"
+                    onClick={remove}
+                  >
+                    <Trash2 size={15} />
+                  </Button>
+                </div>
               </div>
             ) : (
               <div className="empty-editor">
@@ -796,7 +1042,7 @@ function Index() {
                 </Button>
               </div>
             )}
-            <footer className="status-bar">
+            <footer className={`status-bar ${saveStatus === "Saving…" ? "saving" : ""}`}>
               <div>
                 <span>{words} words</span>
                 <span className="detail-separator">·</span>
@@ -818,9 +1064,66 @@ function Index() {
           </section>
         </div>
       </div>
-      <div className="desktop-signature"><span className="local-dot"/>Local by nature. Yours by design.</div>
-      {manager && <NotesManager notes={notes} onClose={()=>setManager(false)} onSelect={openNote} onNew={addNote} onDelete={removeNote} onArchive={n=>setNotes(items=>items.map(item=>item.id===n.id?{...item,deck:n.deck==="archive"?"work":"archive",updated:new Date().toISOString()}:item))}/>}
-      {deleted && <div className="undo-toast" role="status"><Trash2 size={15}/><span>“{deleted.note.title}” deleted</span><Button variant="ghost" onClick={undoDelete}><Undo2 size={14}/>Undo</Button><Button variant="ghost" size="icon" aria-label="Dismiss undo" onClick={()=>setDeleted(null)}><X size={14}/></Button></div>}
+      <div className="desktop-signature">
+        <span className="local-dot" />
+        Local by nature. Yours by design.
+      </div>
+      {manager && (
+        <NotesManager
+          notes={notes}
+          onClose={() => setManager(false)}
+          onSelect={openNote}
+          onNew={addNote}
+          onDelete={removeNote}
+          onArchive={(n) =>
+            setNotes((items) =>
+              items.map((item) =>
+                item.id === n.id
+                  ? {
+                      ...item,
+                      deck: n.deck === "archive" ? "work" : "archive",
+                      updated: new Date().toISOString(),
+                    }
+                  : item,
+              ),
+            )
+          }
+        />
+      )}
+      <SettingsDialog
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        defaultFont={defaultFont}
+        onDefaultFontChange={(font) => {
+          setDefaultFont(font);
+          if (active) update({ font });
+        }}
+        dark={dark}
+        onDarkToggle={setDark}
+        side={side}
+        onSideChange={chooseSide}
+        completedTasksAtBottom={completedTasksAtBottom}
+        onCompletedTasksAtBottomChange={setCompletedTasksAtBottom}
+      />
+      {deleted && (
+        <div className="undo-toast" role="status">
+          <div className="undo-progress" />
+          <Trash2 size={15} />
+          <span>“{deleted.note.title}” deleted · 10s to undo</span>
+          <Button variant="ghost" onClick={undoDelete}>
+            <Undo2 size={14} />
+            Undo
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Dismiss undo"
+            onClick={() => setDeleted(null)}
+          >
+            <X size={14} />
+          </Button>
+        </div>
+      )}
       {toast && (
         <div className="toast-message" role="status">
           <Check size={15} />
